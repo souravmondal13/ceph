@@ -102,7 +102,13 @@ def api_setup(app, conf, cluster, clientname, clientid, args):
 
     app.ceph_cluster = rados.Rados(name=clientname, conffile=conf)
     app.ceph_cluster.conf_parse_argv(args)
-    app.ceph_cluster.connect()
+    try:
+        app.ceph_cluster.connect()
+    except rados.ObjectNotFound as e:
+        # ObjectNotFound AKA ENOENT is what we get when keyring isn't found
+        app.logger.error("Failed to connect ({e}), is authentication configured for client named '{clientname}'?".format(
+            e=e, clientname=clientname
+        ))
 
     app.ceph_baseurl = app.ceph_cluster.conf_get('restapi_base_url') \
          or DEFAULT_BASEURL
