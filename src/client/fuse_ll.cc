@@ -374,7 +374,8 @@ static void fuse_ll_getlk(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 {
   CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
   Fh *fh = (Fh*)fi->fh;
-  int r = cfuse->client->ll_getlk(fh, lock);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+  int r = cfuse->client->ll_getlk(fh, lock, ctx->uid, ctx->gid, ctx->pid);
   if (r == 0) {
     fuse_reply_lock(req, lock);
   } else {
@@ -386,7 +387,9 @@ static void fuse_ll_setlk(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info 
 {
   CephFuse::Handle *cfuse = (CephFuse::Handle *)fuse_req_userdata(req);
   Fh *fh = (Fh*)fi->fh;
-  int r = cfuse->client->ll_setlk(fh, lock, sleep);
+  const struct fuse_ctx *ctx = fuse_req_ctx(req);
+
+  int r = cfuse->client->ll_setlk(fh, lock, sleep, ctx->uid, ctx->gid, ctx->pid);
   fuse_reply_err(req, -r);
 }
 
