@@ -7841,7 +7841,7 @@ int Client::_lock(Fh *fh, int rule, int type, loff_t start, loff_t length, bool 
 int Client::ll_flock(Fh *fh, int op, int uid, int gid, int pid)
 {
   if (!cct->_conf->fuse_multithreaded) {
-    dout(0) << "WARNING: using setlk/getlk/flock without configuring fuse multithreading will result in a deadlock. please set 'fuse multithreaded=1' in your ceph.conf" << dendl;
+    ldout(cct, 0) << "WARNING: using setlk/getlk/flock without configuring fuse multithreading will result in a deadlock. please set 'fuse multithreaded=1' in your ceph.conf" << dendl;
   }
   Mutex::Locker lock(client_lock);
   tout(cct) << "ll_flock" << std::endl;
@@ -7860,7 +7860,7 @@ int Client::ll_flock(Fh *fh, int op, int uid, int gid, int pid)
 int Client::ll_setlk(Fh *fh, struct flock *lock, int sleep, int uid, int gid, int pid)
 {
   if (!cct->_conf->fuse_multithreaded) {
-    dout(0) << "WARNING: using setlk/getlk/flock without configuring fuse multithreading will result in a deadlock. please set 'fuse multithreaded=1' in your ceph.conf" << dendl;
+    ldout(cct, 0) << "WARNING: using setlk/getlk/flock without configuring fuse multithreading will result in a deadlock. please set 'fuse multithreaded=1' in your ceph.conf" << dendl;
   }
   Mutex::Locker locker(client_lock);
   tout(cct) << "ll_setlk" << std::endl;
@@ -7873,7 +7873,7 @@ int Client::ll_setlk(Fh *fh, struct flock *lock, int sleep, int uid, int gid, in
   }
   if (lock->l_whence != SEEK_SET) {
     // normally fuse converts the lock offsets to l_whence=SEEK_SET
-    dout(0) << "WARNING: using setlk with l_whence != SEEK_SET is not supported" << dendl;
+    //dout(0) << "WARNING: using setlk with l_whence != SEEK_SET is not supported" << dendl;
     return -EINVAL;
   }
   return _lock(fh, CEPH_LOCK_FCNTL, type, lock->l_start, lock->l_len, sleep, uid, gid, pid);
@@ -7892,7 +7892,7 @@ int Client::ll_getlk(Fh *fh, struct flock *lock, int uid, int gid, int pid)
   }
   if (lock->l_whence != SEEK_SET) {
     // normally fuse converts the lock offsets to l_whence=SEEK_SET
-    dout(0) << "WARNING: using getlk with l_whence != SEEK_SET is not supported" << dendl;
+    //dout(0) << "WARNING: using getlk with l_whence != SEEK_SET is not supported" << dendl;
     return -EINVAL;
   }
   MetaRequest *req = new MetaRequest(CEPH_MDS_OP_GETFILELOCK);
