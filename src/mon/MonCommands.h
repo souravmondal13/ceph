@@ -342,7 +342,7 @@ COMMAND("mds repaired name=rank,type=CephInt", \
 COMMAND("mds rm " \
 	"name=gid,type=CephInt,range=0", \
 	"remove nonactive mds", "mds", "rw", "cli,rest")
-COMMAND("mds rmfailed name=who,type=CephInt,range=0", "remove failed mds", \
+COMMAND("mds rmfailed name=who,type=CephString", "remove failed mds", \
 	"mds", "rw", "cli,rest")
 COMMAND("mds cluster_down", "take MDS cluster down", "mds", "rw", "cli,rest")
 COMMAND("mds cluster_up", "bring MDS cluster up", "mds", "rw", "cli,rest")

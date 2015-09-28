@@ -2440,8 +2440,10 @@ void Monitor::get_cluster_status(stringstream &ss, Formatter *f)
     ss << "     monmap " << *monmap << "\n";
     ss << "            election epoch " << get_epoch()
        << ", quorum " << get_quorum() << " " << get_quorum_names() << "\n";
-    if (mdsmon()->mdsmap.get_enabled())
+    if (mdsmon()->mdsmap.any_filesystems()) {
       ss << "     mdsmap " << mdsmon()->mdsmap << "\n";
+    }
+
     osdmon()->osdmap.print_summary(NULL, ss);
     pgmon()->pg_map.print_summary(NULL, &ss);
   }

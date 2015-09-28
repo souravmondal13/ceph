@@ -103,7 +103,14 @@ class MDSMonitor : public PaxosService {
 
   bool preprocess_command(MonOpRequestRef op);
   bool prepare_command(MonOpRequestRef op);
+
+  int parse_role(const std::string &role_str, mds_role_t *role);
   int management_command(
+      MonOpRequestRef op,
+      std::string const &prefix,
+      map<string, cmd_vartype> &cmdmap,
+      std::stringstream &ss);
+  int legacy_filesystem_command(
       MonOpRequestRef op,
       std::string const &prefix,
       map<string, cmd_vartype> &cmdmap,
@@ -129,6 +136,10 @@ public:
   {
   }
 
+  bool maybe_promote_standby(std::shared_ptr<Filesystem> fs);
+  bool maybe_expand_cluster(std::shared_ptr<Filesystem> fs);
+  void maybe_replace_gid(mds_gid_t gid, const beacon_info_t &beacon,
+      bool *mds_propose, bool *osd_propose);
   void tick();     // check state, take actions
 
   void dump_info(Formatter *f);
