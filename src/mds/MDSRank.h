@@ -116,6 +116,21 @@ class MMDSMap;
 class MDSRank {
   protected:
     const mds_rank_t whoami;
+    const mds_namespace_t ns;
+
+    /**
+     * When you want to ask the MDSMap about one of your peers,
+     * use this helper to identify them.
+     */
+    mds_role_t peer_role(mds_rank_t peer_rank) const
+    {
+      return mds_role_t(ns, peer_rank);
+    }
+
+    std::shared_ptr<const Filesystem> get_fs() const
+    {
+      return mdsmap->filesystems[ns];
+    }
 
     // Incarnation as seen in MDSMap at the point where a rank is
     // assigned.
@@ -123,7 +138,13 @@ class MDSRank {
 
   public:
     mds_rank_t get_nodeid() const { return whoami; }
+    //mds_namespace_t get_ns() const {return ns; }
     uint64_t get_metadata_pool();
+
+    bool is_cluster_degraded() const
+    {
+      return mdsmap->is_degraded(ns);
+    }
 
     // Reference to global MDS::mds_lock, so that users of MDSRank don't
     // carry around references to the outer MDS, and we can substitute
@@ -190,7 +211,7 @@ class MDSRank {
     bool is_oneshot_replay() const { return state == MDSMap::STATE_ONESHOT_REPLAY; }
     bool is_any_replay() const { return (is_replay() || is_standby_replay() ||
         is_oneshot_replay()); }
-    bool is_stopped() const { return mdsmap->is_stopped(whoami); }
+    bool is_stopped() const { return get_fs()->is_stopped(whoami); }
 
     void handle_write_error(int err);
 
