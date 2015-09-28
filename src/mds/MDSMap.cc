@@ -70,7 +70,8 @@ void MDSMap::mds_info_t::dump(Formatter *f) const
 {
   f->dump_unsigned("gid", global_id);
   f->dump_string("name", name);
-  f->dump_int("rank", rank);
+  f->dump_int("rank", role.rank);
+  f->dump_int("ns", role.ns);
   f->dump_int("incarnation", inc);
   f->dump_stream("state") << ceph_mds_state_name(state);
   f->dump_int("state_seq", state_seq);
@@ -95,26 +96,17 @@ void MDSMap::mds_info_t::generate_test_instances(list<mds_info_t*>& ls)
   sample = new mds_info_t();
   sample->global_id = 1;
   sample->name = "test_instance";
-  sample->rank = 0;
+  sample->role.rank = 1;
+  sample->role.ns = 2;
   ls.push_back(sample);
 }
 
-void MDSMap::dump(Formatter *f) const
+void Filesystem::dump(Formatter *f) const
 {
-  f->dump_int("epoch", epoch);
-  f->dump_unsigned("flags", flags);
-  f->dump_stream("created") << created;
-  f->dump_stream("modified") << modified;
   f->dump_int("tableserver", tableserver);
   f->dump_int("root", root);
-  f->dump_int("session_timeout", session_timeout);
-  f->dump_int("session_autoclose", session_autoclose);
-  f->dump_int("max_file_size", max_file_size);
   f->dump_int("last_failure", last_failure);
   f->dump_int("last_failure_osd_epoch", last_failure_osd_epoch);
-  f->open_object_section("compat");
-  compat.dump(f);
-  f->close_section();
   f->dump_int("max_mds", max_mds);
   f->open_array_section("in");
   for (set<mds_rank_t>::const_iterator p = in.begin(); p != in.end(); ++p)
@@ -139,6 +131,31 @@ void MDSMap::dump(Formatter *f) const
   for (set<mds_rank_t>::const_iterator p = stopped.begin(); p != stopped.end(); ++p)
     f->dump_int("mds", *p);
   f->close_section();
+
+  f->open_array_section("data_pools");
+  for (set<int64_t>::const_iterator p = data_pools.begin(); p != data_pools.end(); ++p)
+    f->dump_int("pool", *p);
+  f->close_section();
+  f->dump_int("metadata_pool", metadata_pool);
+  f->dump_string("fs_name", fs_name);
+  f->dump_int("id", ns);
+
+  f->dump_unsigned("flags", flags);
+  f->dump_int("max_file_size", max_file_size);
+}
+
+void MDSMap::dump(Formatter *f) const
+{
+  f->dump_int("epoch", epoch);
+  f->dump_stream("created") << created;
+  f->dump_stream("modified") << modified;
+  f->dump_int("session_timeout", session_timeout);
+  f->dump_int("session_autoclose", session_autoclose);
+
+  f->open_object_section("compat");
+  compat.dump(f);
+  f->close_section();
+
   f->open_object_section("info");
   for (map<mds_gid_t,mds_info_t>::const_iterator p = mds_info.begin(); p != mds_info.end(); ++p) {
     char s[25]; // 'gid_' + len(str(ULLONG_MAX)) + '\0'
@@ -148,33 +165,41 @@ void MDSMap::dump(Formatter *f) const
     f->close_section();
   }
   f->close_section();
-  f->open_array_section("data_pools");
-  for (set<int64_t>::const_iterator p = data_pools.begin(); p != data_pools.end(); ++p)
-    f->dump_int("pool", *p);
+
+  f->open_object_section("filesystems");
+  for (const auto fs : filesystems) {
+    fs.second->dump(f);
+  }
   f->close_section();
-  f->dump_int("metadata_pool", metadata_pool);
-  f->dump_bool("enabled", enabled);
-  f->dump_string("fs_name", fs_name);
 }
 
 void MDSMap::generate_test_instances(list<MDSMap*>& ls)
 {
   MDSMap *m = new MDSMap();
-  m->max_mds = 1;
-  m->data_pools.insert(0);
-  m->metadata_pool = 1;
-  m->cas_pool = 2;
   m->compat = get_mdsmap_compat_set_all();
+
+  auto fs = std::make_shared<Filesystem>();
+  fs->ns = 20;
+  fs->max_mds = 1;
+  fs->data_pools.insert(0);
+  fs->metadata_pool = 1;
+  fs->cas_pool = 2;
+  fs->max_file_size = 1<<24;
+  m->filesystems[fs->ns] = fs;
 
   // these aren't the defaults, just in case anybody gets confused
   m->session_timeout = 61;
   m->session_autoclose = 301;
-  m->max_file_size = 1<<24;
   ls.push_back(m);
 }
 
 void MDSMap::print(ostream& out) 
 {
+  JSONFormatter f;
+  dump(&f);
+  f.flush(out);
+
+#if 0
   out << "epoch\t" << epoch << "\n";
   out << "flags\t" << hex << flags << dec << "\n";
   out << "created\t" << created << "\n";
@@ -230,22 +255,40 @@ void MDSMap::print(ostream& out)
       out << " export_targets=" << info.export_targets;
     out << "\n";    
   }
+#endif
 }
 
 
 
+// FIXME: revisit this (in the overall health reporting) to
+// give a per-filesystem health.
 void MDSMap::print_summary(Formatter *f, ostream *out)
 {
-  map<mds_rank_t,string> by_rank;
+  map<mds_role_t,string> by_rank;
   map<string,int> by_state;
 
   if (f) {
     f->dump_unsigned("epoch", get_epoch());
-    f->dump_unsigned("up", up.size());
-    f->dump_unsigned("in", in.size());
-    f->dump_unsigned("max", max_mds);
+    for (auto i : filesystems) {
+      auto fs = i.second;
+      f->dump_unsigned("id", fs->ns);
+      f->dump_unsigned("up", fs->up.size());
+      f->dump_unsigned("in", fs->in.size());
+      f->dump_unsigned("max", fs->max_mds);
+    }
   } else {
-    *out << "e" << get_epoch() << ": " << up.size() << "/" << in.size() << "/" << max_mds << " up";
+    *out << "e" << get_epoch() << ":";
+    if (filesystems.size() == 1) {
+      auto fs = filesystems.begin()->second;
+      *out << " " << fs->up.size() << "/" << fs->in.size() << "/"
+           << fs->max_mds << " up";
+    } else {
+      for (auto i : filesystems) {
+        auto fs = i.second;
+        *out << " " << fs->fs_name << "-" << fs->up.size() << "/"
+             << fs->in.size() << "/" << fs->max_mds << " up";
+      }
+    }
   }
 
   if (f)
@@ -257,15 +300,16 @@ void MDSMap::print_summary(Formatter *f, ostream *out)
     if (p->second.laggy())
       s += "(laggy or crashed)";
 
-    if (p->second.rank >= 0) {
+    if (p->second.role.rank != MDS_RANK_NONE) {
       if (f) {
 	f->open_object_section("mds");
-	f->dump_unsigned("rank", p->second.rank);
+	f->dump_unsigned("filesystem_id", p->second.role.ns);
+	f->dump_unsigned("rank", p->second.role.rank);
 	f->dump_string("name", p->second.name);
 	f->dump_string("status", s);
 	f->close_section();
       } else {
-	by_rank[p->second.rank] = p->second.name + "=" + s;
+	by_rank[p->second.role] = p->second.name + "=" + s;
       }
     } else {
       by_state[s]++;
@@ -274,8 +318,28 @@ void MDSMap::print_summary(Formatter *f, ostream *out)
   if (f) {
     f->close_section();
   } else {
-    if (!by_rank.empty())
-      *out << " " << by_rank;
+    if (!by_rank.empty()) {
+      if (filesystems.size() > 0) {
+        // Disambiguate filesystems
+        std::map<std::string, std::string> pretty;
+        for (auto i : by_rank) {
+          std::ostringstream o;
+          // WTF?  How is by_rank getting populated with invalid-namespace
+          // things?
+#if 0
+          std::cerr << i.first.ns << std::endl;
+          std::cerr << i.first.rank << std::endl;
+          std::cerr << i.second;
+          o << filesystems.at(i.first.ns)->fs_name << "-" << i.first.rank;
+#endif
+          o << "[" << i.first.ns << " " << i.first.rank << "]";
+          pretty[o.str()] = i.second;
+        }
+        *out << " " << pretty;
+      } else {
+        *out << " " << by_rank;
+      }
+    }
   }
 
   for (map<string,int>::reverse_iterator p = by_state.rbegin(); p != by_state.rend(); ++p) {
@@ -286,26 +350,34 @@ void MDSMap::print_summary(Formatter *f, ostream *out)
     }
   }
 
-  if (!failed.empty()) {
+  size_t failed = 0;
+  size_t damaged = 0;
+  for (auto i : filesystems) {
+    auto fs = i.second;
+    failed += fs->failed.size();
+    damaged += fs->damaged.size();
+  }
+
+  if (failed > 0) {
     if (f) {
-      f->dump_unsigned("failed", failed.size());
+      f->dump_unsigned("failed", failed);
     } else {
-      *out << ", " << failed.size() << " failed";
+      *out << ", " << failed << " failed";
     }
   }
 
-  if (!damaged.empty()) {
+  if (damaged > 0) {
     if (f) {
-      f->dump_unsigned("damaged", damaged.size());
+      f->dump_unsigned("damaged", damaged);
     } else {
-      *out << ", " << damaged.size() << " damaged";
+      *out << ", " << damaged << " damaged";
     }
   }
   //if (stopped.size())
   //out << ", " << stopped.size() << " stopped";
 }
 
-void MDSMap::get_health(list<pair<health_status_t,string> >& summary,
+void Filesystem::get_health(list<pair<health_status_t,string> >& summary,
 			list<pair<health_status_t,string> > *detail) const
 {
   if (!failed.empty()) {
@@ -342,66 +414,75 @@ void MDSMap::get_health(list<pair<health_status_t,string> >& summary,
     }
   }
 
-  if (is_degraded()) {
-    summary.push_back(make_pair(HEALTH_WARN, "mds cluster is degraded"));
-    if (detail) {
-      detail->push_back(make_pair(HEALTH_WARN, "mds cluster is degraded"));
-      for (mds_rank_t i = mds_rank_t(0); i< get_max_mds(); i++) {
-	if (!is_up(i))
-	  continue;
-	mds_gid_t gid = up.find(i)->second;
-	map<mds_gid_t,mds_info_t>::const_iterator info = mds_info.find(gid);
-	stringstream ss;
-	if (is_resolve(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is resolving";
-	if (is_replay(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is replaying journal";
-	if (is_rejoin(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is rejoining";
-	if (is_reconnect(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is reconnecting to clients";
-	if (ss.str().length())
-	  detail->push_back(make_pair(HEALTH_WARN, ss.str()));
-      }
-    }
-  }
 
-  map<mds_rank_t, mds_gid_t>::const_iterator u = up.begin();
-  map<mds_rank_t, mds_gid_t>::const_iterator u_end = up.end();
-  map<mds_gid_t, mds_info_t>::const_iterator m_end = mds_info.end();
-  set<string> laggy;
-  for (; u != u_end; ++u) {
-    map<mds_gid_t, mds_info_t>::const_iterator m = mds_info.find(u->second);
-    if (m == m_end) {
-      std::cerr << "Up rank " << u->first << " GID " << u->second << " not found!" << std::endl;
-    }
-    assert(m != m_end);
-    const mds_info_t &mds_info(m->second);
-    if (mds_info.laggy()) {
-      laggy.insert(mds_info.name);
+}
+
+
+void MDSMap::get_health(list<pair<health_status_t,string> >& summary,
+			list<pair<health_status_t,string> > *detail) const
+{
+  for (auto i : filesystems) {
+    auto fs = i.second;
+
+    fs->get_health(summary, detail);
+
+    if (is_degraded(fs->ns)) {
+      summary.push_back(make_pair(HEALTH_WARN, "mds cluster is degraded"));
       if (detail) {
-	std::ostringstream oss;
-	oss << "mds." << mds_info.name << " at " << mds_info.addr << " is laggy/unresponsive";
-	detail->push_back(make_pair(HEALTH_WARN, oss.str()));
+        detail->push_back(make_pair(HEALTH_WARN, "mds cluster is degraded"));
+        for (mds_rank_t i = mds_rank_t(0); i < fs->get_max_mds(); i++) {
+          if (!fs->is_up(i))
+            continue;
+          mds_gid_t gid = fs->up.find(i)->second;
+          auto info = mds_info.at(gid);
+          stringstream ss;
+          if (is_resolve(mds_role_t(fs->ns, i)))
+            ss << "mds." << info.name << " at " << info.addr
+               << " rank " << i << " is resolving";
+          if (is_replay(mds_role_t(fs->ns, i)))
+            ss << "mds." << info.name << " at " << info.addr
+               << " rank " << i << " is replaying journal";
+          if (is_rejoin(mds_role_t(fs->ns, i)))
+            ss << "mds." << info.name << " at " << info.addr
+               << " rank " << i << " is rejoining";
+          if (is_reconnect(mds_role_t(fs->ns, i)))
+            ss << "mds." << info.name << " at " << info.addr
+               << " rank " << i << " is reconnecting to clients";
+          if (ss.str().length())
+            detail->push_back(make_pair(HEALTH_WARN, ss.str()));
+        }
       }
     }
-  }
 
-  if (!laggy.empty()) {
-    std::ostringstream oss;
-    oss << "mds " << laggy
-	<< ((laggy.size() > 1) ? " are":" is")
-	<< " laggy";
-    summary.push_back(make_pair(HEALTH_WARN, oss.str()));
+    set<string> laggy;
+    for (auto u : fs->up) {
+      auto info = mds_info.at(u.second);
+      if (info.laggy()) {
+        laggy.insert(info.name);
+        if (detail) {
+          std::ostringstream oss;
+          oss << "mds." << info.name << " at " << info.addr << " is laggy/unresponsive";
+          detail->push_back(make_pair(HEALTH_WARN, oss.str()));
+        }
+      }
+    }
+
+    if (!laggy.empty()) {
+      std::ostringstream oss;
+      oss << "mds " << laggy
+          << ((laggy.size() > 1) ? " are":" is")
+          << " laggy";
+      summary.push_back(make_pair(HEALTH_WARN, oss.str()));
+    }
   }
 }
 
 void MDSMap::mds_info_t::encode_versioned(bufferlist& bl, uint64_t features) const
 {
-  ENCODE_START(4, 4, bl);
+  ENCODE_START(5, 4, bl);
   ::encode(global_id, bl);
   ::encode(name, bl);
-  ::encode(rank, bl);
+  ::encode(role.rank, bl);
   ::encode(inc, bl);
   ::encode((int32_t)state, bl);
   ::encode(state_seq, bl);
@@ -410,6 +491,7 @@ void MDSMap::mds_info_t::encode_versioned(bufferlist& bl, uint64_t features) con
   ::encode(standby_for_rank, bl);
   ::encode(standby_for_name, bl);
   ::encode(export_targets, bl);
+  ::encode(role.ns, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -419,7 +501,7 @@ void MDSMap::mds_info_t::encode_unversioned(bufferlist& bl) const
   ::encode(struct_v, bl);
   ::encode(global_id, bl);
   ::encode(name, bl);
-  ::encode(rank, bl);
+  ::encode(role.rank, bl);
   ::encode(inc, bl);
   ::encode((int32_t)state, bl);
   ::encode(state_seq, bl);
@@ -432,10 +514,10 @@ void MDSMap::mds_info_t::encode_unversioned(bufferlist& bl) const
 
 void MDSMap::mds_info_t::decode(bufferlist::iterator& bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(4, 4, 4, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(5, 4, 4, bl);
   ::decode(global_id, bl);
   ::decode(name, bl);
-  ::decode(rank, bl);
+  ::decode(role.rank, bl);
   ::decode(inc, bl);
   ::decode((int32_t&)(state), bl);
   ::decode(state_seq, bl);
@@ -445,6 +527,27 @@ void MDSMap::mds_info_t::decode(bufferlist::iterator& bl)
   ::decode(standby_for_name, bl);
   if (struct_v >= 2)
     ::decode(export_targets, bl);
+  if (struct_v >= 5) {
+    ::decode(role.ns, bl);
+  } else {
+    // Upgrading: if the daemon had a rank, assign it to the ANONYMOUS
+    // namespace, the same namespace ID that's used in MDSMap::decode
+    // for synthesizing a Filesystem from a legacy map
+    role.ns = MDS_NAMESPACE_ANONYMOUS;
+  }
+  if (role.rank >= 0) {
+    std::cerr << "XXX " << struct_v << std::endl;
+    std::cerr << "XXX " << role.rank << std::endl;
+    std::cerr << "XXX " << role.ns << std::endl;
+    assert(role.ns != MDS_NAMESPACE_NONE);
+  }
+
+  // HACK: remove this assert IRL, in dev we know that
+  // filesystems should never be from an upgrade, so the FS NS ID should
+  // have started at 1
+  assert(struct_v >= 5);
+  assert(role.ns != MDS_NAMESPACE_ANONYMOUS);
+
   DECODE_FINISH(bl);
 }
 
@@ -452,8 +555,58 @@ void MDSMap::mds_info_t::decode(bufferlist::iterator& bl)
 
 void MDSMap::encode(bufferlist& bl, uint64_t features) const
 {
+  // Pull values from the legacy client namespace
+  // for any clients using this ancient protocol.
+  epoch_t last_failure = 0;
+  epoch_t last_failure_osd_epoch = 0;
+  mds_rank_t root = 0;
+  mds_rank_t tableserver = 0;
+  uint64_t max_file_size = 0;
+  mds_rank_t max_mds = 0;
+  std::set<int64_t> data_pools;
+  int64_t cas_pool = 0;
+  int64_t metadata_pool = 0;
+  bool inline_data_enabled = false;
+  std::string fs_name;
+  uint32_t flags = 0;
+  bool ever_allowed_snaps = false;
+  bool explicitly_allowed_snaps = false;
+  bool enabled = false;
+
+  std::set<mds_rank_t> in, failed, stopped, damaged;
+  std::map<mds_rank_t, mds_gid_t> up;
+  std::map<mds_rank_t,int32_t> inc;
+
+  if (legacy_client_namespace != MDS_NAMESPACE_NONE) {
+    auto fs = filesystems.at(legacy_client_namespace);
+    last_failure = fs->last_failure;
+    last_failure_osd_epoch = fs->last_failure_osd_epoch;
+    root = fs->root;
+    tableserver = fs->tableserver;
+    max_file_size = fs->max_file_size;
+    max_mds = fs->max_mds;
+    data_pools = fs->data_pools;
+    cas_pool = fs->cas_pool;
+    metadata_pool = fs->metadata_pool;
+
+    in = fs->in;
+    failed = fs->failed;
+    stopped = fs->stopped;
+    damaged = fs->damaged;
+    up = fs->up;
+    inc = fs->inc;
+    ever_allowed_snaps = fs->ever_allowed_snaps;
+    explicitly_allowed_snaps = fs->explicitly_allowed_snaps;
+
+    inline_data_enabled = fs->inline_data_enabled;
+    fs_name = fs->fs_name;
+    flags = fs->flags;
+    enabled = true;
+  }
+
   if ((features & CEPH_FEATURE_PGID64) == 0) {
     __u16 v = 2;
+
     ::encode(v, bl);
     ::encode(epoch, bl);
     ::encode(flags, bl);
@@ -482,6 +635,7 @@ void MDSMap::encode(bufferlist& bl, uint64_t features) const
     return;
   } else if ((features & CEPH_FEATURE_MDSENC) == 0) {
     __u16 v = 3;
+
     ::encode(v, bl);
     ::encode(epoch, bl);
     ::encode(flags, bl);
@@ -532,7 +686,7 @@ void MDSMap::encode(bufferlist& bl, uint64_t features) const
   ::encode(cas_pool, bl);
 
   // kclient ignores everything from here
-  __u16 ev = 9;
+  __u16 ev = 10;
   ::encode(ev, bl);
   ::encode(compat, bl);
   ::encode(metadata_pool, bl);
@@ -551,20 +705,30 @@ void MDSMap::encode(bufferlist& bl, uint64_t features) const
   ::encode(enabled, bl);
   ::encode(fs_name, bl);
   ::encode(damaged, bl);
+  ::encode(next_filesystem_id, bl);
+  ::encode(legacy_client_namespace, bl);
+  std::vector<Filesystem> fs_list;
+  for (auto i : filesystems) {
+    fs_list.push_back(*(i.second));
+  }
+  ::encode(fs_list, bl);
   ENCODE_FINISH(bl);
 }
 
 void MDSMap::decode(bufferlist::iterator& p)
 {
+  Filesystem legacy_fs;
+  bool enabled = false;
+  
   DECODE_START_LEGACY_COMPAT_LEN_16(5, 4, 4, p);
   ::decode(epoch, p);
-  ::decode(flags, p);
-  ::decode(last_failure, p);
-  ::decode(root, p);
+  ::decode(legacy_fs.flags, p);
+  ::decode(legacy_fs.last_failure, p);
+  ::decode(legacy_fs.root, p);
   ::decode(session_timeout, p);
   ::decode(session_autoclose, p);
-  ::decode(max_file_size, p);
-  ::decode(max_mds, p);
+  ::decode(legacy_fs.max_file_size, p);
+  ::decode(legacy_fs.max_mds, p);
   ::decode(mds_info, p);
   if (struct_v < 3) {
     __u32 n;
@@ -572,14 +736,14 @@ void MDSMap::decode(bufferlist::iterator& p)
     while (n--) {
       __u32 m;
       ::decode(m, p);
-      data_pools.insert(m);
+      legacy_fs.data_pools.insert(m);
     }
     __s32 s;
     ::decode(s, p);
-    cas_pool = s;
+    legacy_fs.cas_pool = s;
   } else {
-    ::decode(data_pools, p);
-    ::decode(cas_pool, p);
+    ::decode(legacy_fs.data_pools, p);
+    ::decode(legacy_fs.cas_pool, p);
   }
 
   // kclient ignores everything from here
@@ -593,34 +757,34 @@ void MDSMap::decode(bufferlist::iterator& p)
   if (ev < 5) {
     __u32 n;
     ::decode(n, p);
-    metadata_pool = n;
+    legacy_fs.metadata_pool = n;
   } else {
-    ::decode(metadata_pool, p);
+    ::decode(legacy_fs.metadata_pool, p);
   }
   ::decode(created, p);
   ::decode(modified, p);
-  ::decode(tableserver, p);
-  ::decode(in, p);
-  ::decode(inc, p);
-  ::decode(up, p);
-  ::decode(failed, p);
-  ::decode(stopped, p);
+  ::decode(legacy_fs.tableserver, p);
+  ::decode(legacy_fs.in, p);
+  ::decode(legacy_fs.inc, p);
+  ::decode(legacy_fs.up, p);
+  ::decode(legacy_fs.failed, p);
+  ::decode(legacy_fs.stopped, p);
   if (ev >= 4)
-    ::decode(last_failure_osd_epoch, p);
+    ::decode(legacy_fs.last_failure_osd_epoch, p);
   if (ev >= 6) {
-    ::decode(ever_allowed_snaps, p);
-    ::decode(explicitly_allowed_snaps, p);
+    ::decode(legacy_fs.ever_allowed_snaps, p);
+    ::decode(legacy_fs.explicitly_allowed_snaps, p);
   } else {
-    ever_allowed_snaps = true;
-    explicitly_allowed_snaps = false;
+    legacy_fs.ever_allowed_snaps = true;
+    legacy_fs.explicitly_allowed_snaps = false;
   }
   if (ev >= 7)
-    ::decode(inline_data_enabled, p);
+    ::decode(legacy_fs.inline_data_enabled, p);
 
   if (ev >= 8) {
     assert(struct_v >= 5);
     ::decode(enabled, p);
-    ::decode(fs_name, p);
+    ::decode(legacy_fs.fs_name, p);
   } else {
     if (epoch > 1) {
       // If an MDS has ever been started, epoch will be greater than 1,
@@ -634,7 +798,87 @@ void MDSMap::decode(bufferlist::iterator& p)
   }
 
   if (ev >= 9) {
-    ::decode(damaged, p);
+    ::decode(legacy_fs.damaged, p);
   }
+
+  if (ev >= 10) {
+    ::decode(next_filesystem_id, p);
+    ::decode(legacy_client_namespace, p);
+    std::vector<Filesystem> fs_list;
+    ::decode(fs_list, p);
+    std::cerr << "decoding new style " << fs_list.size() << std::endl;
+    filesystems.clear();
+    for (std::vector<Filesystem>::const_iterator fs = fs_list.begin(); fs != fs_list.end(); ++fs) {
+      filesystems[fs->ns] = std::make_shared<Filesystem>(*fs);
+    }
+  } else if (ev < 10 && enabled) {
+    // We're upgrading, populate fs_list from the legacy fields
+    std::cerr << "decoding upgrade" << std::endl;
+    assert(filesystems.empty());
+    auto migrate_fs = std::make_shared<Filesystem>(); 
+
+    *migrate_fs = legacy_fs;
+    migrate_fs->ns = MDS_NAMESPACE_ANONYMOUS;
+    migrate_fs->fs_name = "default";
+    legacy_client_namespace = migrate_fs->ns;
+  }
+
+  DECODE_FINISH(p);
+}
+
+
+void Filesystem::encode(bufferlist& bl) const
+{
+  ENCODE_START(1, 1, bl);
+  ::encode(fs_name, bl);
+  ::encode(ns, bl);
+  ::encode(last_failure, bl);
+  ::encode(last_failure_osd_epoch, bl);
+  ::encode(tableserver, bl);
+  ::encode(root, bl);
+  ::encode(data_pools, bl);
+  ::encode(cas_pool, bl);
+  ::encode(metadata_pool, bl);
+  ::encode(ever_allowed_snaps, bl);
+  ::encode(explicitly_allowed_snaps, bl);
+  ::encode(inline_data_enabled, bl);
+  ::encode(max_file_size, bl);
+  ::encode(flags, bl);
+  ::encode(max_mds, bl);
+  ::encode(in, bl);
+  ::encode(inc, bl);
+  ::encode(failed, bl);
+  ::encode(stopped, bl);
+  ::encode(damaged, bl);
+  ::encode(up, bl);
+  std::cerr << "Filesystem::encode " << fs_name << std::endl;
+  ENCODE_FINISH(bl);
+}
+
+void Filesystem::decode(bufferlist::iterator& p)
+{
+  DECODE_START(1, p);
+  ::decode(fs_name, p);
+  ::decode(ns, p);
+  ::decode(last_failure, p);
+  ::decode(last_failure_osd_epoch, p);
+  ::decode(tableserver, p);
+  ::decode(root, p);
+  ::decode(data_pools, p);
+  ::decode(cas_pool, p);
+  ::decode(metadata_pool, p);
+  ::decode(ever_allowed_snaps, p);
+  ::decode(explicitly_allowed_snaps, p);
+  ::decode(inline_data_enabled, p);
+  ::decode(max_file_size, p);
+  ::decode(flags, p);
+  ::decode(max_mds, p);
+  ::decode(in, p);
+  ::decode(inc, p);
+  ::decode(failed, p);
+  ::decode(stopped, p);
+  ::decode(damaged, p);
+  ::decode(up, p);
+  std::cerr << "Filesystem::decode " << fs_name << std::endl;
   DECODE_FINISH(p);
 }
