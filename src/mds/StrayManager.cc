@@ -97,7 +97,7 @@ void StrayManager::purge(CDentry *dn, uint32_t op_allowance)
         this, dn, false, op_allowance), mds->finisher));
 
   if (in->is_dir()) {
-    object_locator_t oloc(mds->mdsmap->get_metadata_pool());
+    object_locator_t oloc(mds->get_metadata_pool());
     std::list<frag_t> ls;
     if (!in->dirfragtree.is_leaf(frag_t()))
       in->dirfragtree.get_leaves(ls);

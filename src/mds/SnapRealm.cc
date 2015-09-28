@@ -133,7 +133,7 @@ bool SnapRealm::_open_parents(MDSInternalContextBase *finish, snapid_t first, sn
       if (!parent) {
 	C_SR_RetryOpenParents *fin = new C_SR_RetryOpenParents(this, first, last, p->first,
 							       p->second.ino, finish);
-	mdcache->open_ino(p->second.ino, mdcache->mds->mdsmap->get_metadata_pool(), fin);
+	mdcache->open_ino(p->second.ino, mdcache->mds->get_metadata_pool(), fin);
 	return false;
       }
       if (parent->state_test(CInode::STATE_PURGING)) {

@@ -173,7 +173,7 @@ void MDBalancer::send_heartbeat()
 {
   utime_t now = ceph_clock_now(g_ceph_context);
   
-  if (mds->mdsmap->is_degraded()) {
+  if (mds->is_cluster_degraded()) {
     dout(10) << "send_heartbeat degraded" << dendl;
     return;
   }
@@ -246,7 +246,7 @@ void MDBalancer::handle_heartbeat(MHeartbeat *m)
     return;
   }
 
-  if (mds->mdsmap->is_degraded()) {
+  if (mds->is_cluster_degraded()) {
     dout(10) << " degraded, ignoring" << dendl;
     goto out;
   }

@@ -958,7 +958,7 @@ void CInode::store(MDSInternalContextBase *fin)
   m.write_full(bl);
 
   object_t oid = CInode::get_object_name(ino(), frag_t(), ".inode");
-  object_locator_t oloc(mdcache->mds->mdsmap->get_metadata_pool());
+  object_locator_t oloc(mdcache->mds->get_metadata_pool());
 
   Context *newfin =
     new C_OnFinisher(new C_IO_Inode_Stored(this, get_version(), fin),
@@ -1029,7 +1029,7 @@ void CInode::fetch(MDSInternalContextBase *fin)
   C_GatherBuilder gather(g_ceph_context, new C_OnFinisher(c, mdcache->mds->finisher));
 
   object_t oid = CInode::get_object_name(ino(), frag_t(), "");
-  object_locator_t oloc(mdcache->mds->mdsmap->get_metadata_pool());
+  object_locator_t oloc(mdcache->mds->get_metadata_pool());
 
   // Old on-disk format: inode stored in xattr of a dirfrag
   ObjectOperation rd;
@@ -1125,7 +1125,7 @@ void CInode::store_backtrace(MDSInternalContextBase *fin, int op_prio)
 
   int64_t pool;
   if (is_dir()) {
-    pool = mdcache->mds->mdsmap->get_metadata_pool();
+    pool = mdcache->mds->get_metadata_pool();
   } else {
     pool = inode.layout.fl_pg_pool;
   }
@@ -1208,7 +1208,7 @@ void CInode::fetch_backtrace(Context *fin, bufferlist *backtrace)
 {
   int64_t pool;
   if (is_dir())
-    pool = mdcache->mds->mdsmap->get_metadata_pool();
+    pool = mdcache->mds->get_metadata_pool();
   else
     pool = inode.layout.fl_pg_pool;
 
@@ -3699,7 +3699,7 @@ void CInode::validate_disk_state(CInode::validated_data *results,
       }
       int64_t pool;
       if (in->is_dir())
-        pool = in->mdcache->mds->mdsmap->get_metadata_pool();
+        pool = in->mdcache->mds->get_metadata_pool();
       else
         pool = in->inode.layout.fl_pg_pool;
       inode_backtrace_t& memory_backtrace = results->backtrace.memory_value;

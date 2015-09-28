@@ -1464,7 +1464,7 @@ void CDir::_tmap_fetch(const string& want_dn)
   // start by reading the first hunk of it
   C_IO_Dir_TMAP_Fetched *fin = new C_IO_Dir_TMAP_Fetched(this, want_dn);
   object_t oid = get_ondisk_object();
-  object_locator_t oloc(cache->mds->mdsmap->get_metadata_pool());
+  object_locator_t oloc(cache->mds->get_metadata_pool());
   ObjectOperation rd;
   rd.tmap_get(&fin->bl, NULL);
   cache->mds->objecter->read(oid, oloc, rd, CEPH_NOSNAP, NULL, 0,
@@ -1527,7 +1527,7 @@ void CDir::_omap_fetch(const string& want_dn)
 {
   C_IO_Dir_OMAP_Fetched *fin = new C_IO_Dir_OMAP_Fetched(this, want_dn);
   object_t oid = get_ondisk_object();
-  object_locator_t oloc(cache->mds->mdsmap->get_metadata_pool());
+  object_locator_t oloc(cache->mds->get_metadata_pool());
   ObjectOperation rd;
   rd.omap_get_header(&fin->hdrbl, &fin->ret1);
   rd.omap_get_vals("", "", (uint64_t)-1, &fin->omap, &fin->ret2);
@@ -1980,7 +1980,7 @@ void CDir::_omap_commit(int op_prio)
 
   SnapContext snapc;
   object_t oid = get_ondisk_object();
-  object_locator_t oloc(cache->mds->mdsmap->get_metadata_pool());
+  object_locator_t oloc(cache->mds->get_metadata_pool());
 
   if (!stale_items.empty()) {
     for (compact_set<string>::iterator p = stale_items.begin();

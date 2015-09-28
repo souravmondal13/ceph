@@ -8019,7 +8019,7 @@ void MDCache::open_remote_dentry(CDentry *dn, bool projected, MDSInternalContext
   dout(10) << "open_remote_dentry " << *dn << dendl;
   CDentry::linkage_t *dnl = projected ? dn->get_projected_linkage() : dn->get_linkage();
   inodeno_t ino = dnl->get_remote_ino();
-  uint64_t pool = dnl->get_remote_d_type() == DT_DIR ? mds->mdsmap->get_metadata_pool() : -1;
+  uint64_t pool = dnl->get_remote_d_type() == DT_DIR ? mds->get_metadata_pool() : -1;
   open_ino(ino, pool,
       new C_MDC_OpenRemoteDentry(this, dn, ino, fin, want_xlocked), true, want_xlocked); // backtrace
 }
@@ -8113,7 +8113,7 @@ void MDCache::_open_ino_backtrace_fetched(inodeno_t ino, bufferlist& bl, int err
       return;
     }
   } else if (err == -ENOENT) {
-    int64_t meta_pool = mds->mdsmap->get_metadata_pool();
+    int64_t meta_pool = mds->get_metadata_pool();
     if (info.pool != meta_pool) {
       dout(10) << " no object in pool " << info.pool
 	       << ", retrying pool " << meta_pool << dendl;
@@ -8353,7 +8353,7 @@ void MDCache::do_open_ino(inodeno_t ino, open_ino_info_t& info, int err)
   } else {
     assert(!info.ancestors.empty());
     info.checking = mds->get_nodeid();
-    open_ino(info.ancestors[0].dirino, mds->mdsmap->get_metadata_pool(),
+    open_ino(info.ancestors[0].dirino, mds->get_metadata_pool(),
 	     new C_MDC_OpenInoParentOpened(this, ino), info.want_replica);
   }
 }
@@ -10484,7 +10484,7 @@ bool MDCache::can_fragment(CInode *diri, list<CDir*>& dirs)
     dout(7) << "can_fragment: read-only FS, no fragmenting for now" << dendl;
     return false;
   }
-  if (mds->mdsmap->is_degraded()) {
+  if (mds->is_cluster_degraded()) {
     dout(7) << "can_fragment: cluster degraded, no fragmenting for now" << dendl;
     return false;
   }
@@ -11075,7 +11075,7 @@ void MDCache::_fragment_committed(dirfrag_t basedirfrag, list<CDir*>& resultfrag
       mds->finisher));
 
   SnapContext nullsnapc;
-  object_locator_t oloc(mds->mdsmap->get_metadata_pool());
+  object_locator_t oloc(mds->get_metadata_pool());
   for (list<frag_t>::iterator p = uf.old_frags.begin();
        p != uf.old_frags.end();
        ++p) {

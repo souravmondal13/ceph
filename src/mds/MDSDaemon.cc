@@ -842,7 +842,10 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
 
   // Calculate my effective rank (either my owned rank or my
   // standby_for_rank if in standby replay)
-  mds_rank_t whoami = mdsmap->get_rank_gid(mds_gid_t(monc->get_global_id()));
+
+  mds_role_t role = mdsmap->get_role_gid(mds_gid_t(monc->get_global_id()));
+  // HEY do something with role.ns
+  mds_rank_t whoami = role.rank;
 
   // verify compatset
   CompatSet mdsmap_compat(get_mdsmap_compat_set_all());
@@ -916,6 +919,12 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
     dout(10) <<  __func__ << ": handling map in rankless mode" << dendl;
     _handle_mds_map(oldmap);
   } else {
+
+    // Did our filesystem go away?
+    if (mds_rank && mdsmap->filesystems.count(mds_rank->get_ns()) == 0) {
+      derr << "Filesystem disappeared " << mds_rank->get_ns() << dendl;
+      respawn();
+    }
 
     // Did we already hold a different rank?  MDSMonitor shouldn't try
     // to change that out from under me!
