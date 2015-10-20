@@ -326,18 +326,22 @@ void MDCache::remove_inode(CInode *o)
   delete o; 
 }
 
-ceph_file_layout MDCache::gen_default_file_layout(const MDSMap &mdsmap)
+ceph_file_layout MDCache::gen_default_file_layout(
+    const MDSMap &mdsmap,
+    mds_namespace_t ns)
 {
   ceph_file_layout result = g_default_file_layout;
-  result.fl_pg_pool = mdsmap.get_first_data_pool();
+  result.fl_pg_pool = mdsmap.get_filesystem(ns)->get_first_data_pool();
 
   return result;
 }
 
-ceph_file_layout MDCache::gen_default_log_layout(const MDSMap &mdsmap)
+ceph_file_layout MDCache::gen_default_log_layout(
+    const MDSMap &mdsmap,
+    mds_namespace_t ns)
 {
   ceph_file_layout result = g_default_file_layout;
-  result.fl_pg_pool = mdsmap.get_metadata_pool();
+  result.fl_pg_pool = mdsmap.get_filesystem(ns)->get_metadata_pool();
   if (g_conf->mds_log_segment_size > 0) {
     result.fl_object_size = g_conf->mds_log_segment_size;
     result.fl_stripe_unit = g_conf->mds_log_segment_size;
@@ -348,8 +352,8 @@ ceph_file_layout MDCache::gen_default_log_layout(const MDSMap &mdsmap)
 
 void MDCache::init_layouts()
 {
-  default_file_layout = gen_default_file_layout(*(mds->mdsmap));
-  default_log_layout = gen_default_log_layout(*(mds->mdsmap));
+  default_file_layout = gen_default_file_layout(*(mds->mdsmap), mds->get_ns());
+  default_log_layout = gen_default_log_layout(*(mds->mdsmap), mds->get_ns());
 
 }
 
@@ -403,7 +407,7 @@ CInode *MDCache::create_root_inode()
   i->inode.uid = g_conf->mds_root_ino_uid;
   i->inode.gid = g_conf->mds_root_ino_gid;
   i->inode.layout = default_file_layout;
-  i->inode.layout.fl_pg_pool = mds->mdsmap->get_first_data_pool();
+  i->inode.layout.fl_pg_pool = mds->get_fs()->get_first_data_pool();
   return i;
 }
 
@@ -584,12 +588,12 @@ struct C_MDS_RetryOpenRoot : public MDSInternalContext {
 
 void MDCache::open_root_inode(MDSInternalContextBase *c)
 {
-  if (mds->get_nodeid() == mds->mdsmap->get_root()) {
+  if (mds->get_nodeid() == mds->get_fs()->get_root()) {
     CInode *in;
     in = create_system_inode(MDS_INO_ROOT, S_IFDIR|0755);  // initially inaccurate!
     in->fetch(c);
   } else {
-    discover_base_ino(MDS_INO_ROOT, c, mds->mdsmap->get_root());
+    discover_base_ino(MDS_INO_ROOT, c, mds->get_fs()->get_root());
   }
 }
 
@@ -607,7 +611,7 @@ void MDCache::open_root()
     open_root_inode(new C_MDS_RetryOpenRoot(this));
     return;
   }
-  if (mds->get_nodeid() == mds->mdsmap->get_root()) {
+  if (mds->get_nodeid() == mds->get_fs()->get_root()) {
     assert(root->is_auth());  
     CDir *rootdir = root->get_or_open_dirfrag(this, frag_t());
     assert(rootdir);
@@ -2658,7 +2662,7 @@ void MDCache::resolve_start(MDSInternalContext *resolve_done_)
   assert(resolve_done == NULL);
   resolve_done = resolve_done_;
 
-  if (mds->mdsmap->get_root() != mds->get_nodeid()) {
+  if (mds->get_fs()->get_root() != mds->get_nodeid()) {
     // if we don't have the root dir, adjust it to UNKNOWN.  during
     // resolve we want mds0 to explicit claim the portion of it that
     // it owns, so that anything beyond its bounds get left as
@@ -2706,7 +2710,7 @@ void MDCache::send_slave_resolves()
     }
   } else {
     set<mds_rank_t> resolve_set;
-    mds->mdsmap->get_mds_set(resolve_set, MDSMap::STATE_RESOLVE);
+    mds->get_peer_set(resolve_set, MDSMap::STATE_RESOLVE);
     for (ceph::unordered_map<metareqid_t, MDRequestRef>::iterator p = active_requests.begin();
 	 p != active_requests.end();
 	 ++p) {
@@ -2761,7 +2765,7 @@ void MDCache::send_subtree_resolves()
        ++p) {
     if (*p == mds->get_nodeid())
       continue;
-    if (mds->is_resolve() || mds->mdsmap->is_resolve(*p))
+    if (mds->is_resolve() || mds->peer_is_resolve(*p))
       resolves[*p] = new MMDSResolve;
   }
 
@@ -2838,8 +2842,7 @@ void MDCache::handle_mds_failure(mds_rank_t who)
   dout(7) << "handle_mds_failure mds." << who << dendl;
   
   // make note of recovery set
-  mds->mdsmap->get_recovery_mds_set(recovery_set);
-  recovery_set.erase(mds->get_nodeid());
+  mds->get_recovery_peers(recovery_set);
   dout(1) << "handle_mds_failure mds." << who << " : recovery peers are " << recovery_set << dendl;
 
   resolve_gather.insert(who);
@@ -2899,7 +2902,7 @@ void MDCache::handle_mds_failure(mds_rank_t who)
       }
 
       if (mdr->more()->srcdn_auth_mds == who &&
-	  mds->mdsmap->is_clientreplay_or_active_or_stopping(mdr->slave_to_mds)) {
+	  mds->peer_is_clientreplay_or_active_or_stopping(mdr->slave_to_mds)) {
 	// rename srcdn's auth mds failed, resolve even I'm a survivor.
 	dout(10) << " slave request " << *mdr << " uncommitted, will resolve shortly" << dendl;
 	add_ambiguous_slave_update(p->first, mdr->slave_to_mds);
@@ -3291,13 +3294,13 @@ void MDCache::handle_resolve_ack(MMDSResolveAck *ack)
   mds_rank_t from = mds_rank_t(ack->get_source().num());
 
   if (!resolve_ack_gather.count(from) ||
-      mds->mdsmap->get_state(from) < MDSMap::STATE_RESOLVE) {
+      mds->get_peer_state(from) < MDSMap::STATE_RESOLVE) {
     ack->put();
     return;
   }
 
   if (ambiguous_slave_updates.count(from)) {
-    assert(mds->mdsmap->is_clientreplay_or_active_or_stopping(from));
+    assert(mds->peer_is_clientreplay_or_active_or_stopping(from));
     assert(mds->is_clientreplay() || mds->is_active() || mds->is_stopping());
   }
 
@@ -3701,7 +3704,7 @@ void MDCache::recalc_auth_bits(bool replay)
   dout(7) << "recalc_auth_bits " << (replay ? "(replay)" : "") <<  dendl;
 
   if (root) {
-    root->inode_auth.first = mds->mdsmap->get_root();
+    root->inode_auth.first = mds->get_fs()->get_root();
     bool auth = mds->get_nodeid() == root->inode_auth.first;
     if (auth) {
       root->state_set(CInode::STATE_AUTH);
@@ -3897,10 +3900,11 @@ void MDCache::rejoin_send_rejoins()
        ++p) {
     if (*p == mds->get_nodeid())  continue;  // nothing to myself!
     if (rejoin_sent.count(*p)) continue;     // already sent a rejoin to this node!
-    if (mds->is_rejoin())
+    if (mds->is_rejoin()) {
       rejoins[*p] = new MMDSCacheRejoin(MMDSCacheRejoin::OP_WEAK);
-    else if (mds->mdsmap->is_rejoin(*p))
+    } else if (mds->peer_is_rejoin(*p)) {
       rejoins[*p] = new MMDSCacheRejoin(MMDSCacheRejoin::OP_STRONG);
+    }
   }
 
   if (mds->is_rejoin()) {
@@ -6290,14 +6294,14 @@ bool MDCache::trim(int max, int count)
     CDir *subtree = *s;
     if (subtree->inode->is_mdsdir()) {
       mds_rank_t owner = mds_rank_t(MDS_INO_MDSDIR_OWNER(subtree->inode->ino()));
-      if (owner == mds->get_nodeid() || !mds->mdsmap->is_up(owner)) {
+      if (owner == mds->get_nodeid() || !mds->get_fs()->is_up(owner)) {
         continue;
       }
 
       dout(20) << __func__ << ": checking remote MDS dir " << *(subtree) << dendl;
 
-      const MDSMap::mds_info_t &owner_info = mds->mdsmap->get_mds_info(owner);
-      if (owner_info.state == MDSMap::STATE_STOPPING) {
+      auto owner_state = mds->mdsmap->get_state(mds->peer_role(owner));
+      if (owner_state == MDSMap::STATE_STOPPING) {
         dout(20) << __func__ << ": it's stopping, remove it" << dendl;
         if (expiremap.count(owner) == 0)  {
           expiremap[owner] = new MCacheExpire(mds->get_nodeid());
@@ -6349,8 +6353,8 @@ void MDCache::send_expire_messages(map<mds_rank_t, MCacheExpire*>& expiremap)
   for (map<mds_rank_t, MCacheExpire*>::iterator it = expiremap.begin();
        it != expiremap.end();
        ++it) {
-    if (mds->mdsmap->get_state(it->first) < MDSMap::STATE_REJOIN ||
-	(mds->mdsmap->get_state(it->first) == MDSMap::STATE_REJOIN &&
+    if (mds->get_peer_state(it->first) < MDSMap::STATE_REJOIN ||
+	(mds->get_peer_state(it->first) == MDSMap::STATE_REJOIN &&
 	 rejoin_sent.count(it->first) == 0)) {
       it->second->put();
       continue;
@@ -7334,7 +7338,7 @@ bool MDCache::shutdown_pass()
     for (list<CDir*>::iterator p = ls.begin(); p != ls.end(); ++p) {
       CDir *dir = *p;
       mds_rank_t dest = dir->get_inode()->authority().first;
-      if (dest > 0 && !mds->mdsmap->is_active(dest))
+      if (dest > 0 && !mds->peer_is_active(dest))
 	dest = 0;
       dout(7) << "sending " << *dir << " back to mds." << dest << dendl;
       migrator->export_dir(dir, dest);
@@ -7956,7 +7960,7 @@ void MDCache::open_remote_dirfrag(CInode *diri, frag_t approxfg, MDSInternalCont
 
   mds_rank_t auth = diri->authority().first;
 
-  if (mds->mdsmap->get_state(auth) >= MDSMap::STATE_REJOIN) {
+  if (mds->get_peer_state(auth) >= MDSMap::STATE_REJOIN) {
     discover_dir_frag(diri, approxfg, fin);
   } else {
     // mds is down or recovering.  forge a replica!
@@ -8361,10 +8365,10 @@ void MDCache::do_open_ino(inodeno_t ino, open_ino_info_t& info, int err)
 void MDCache::do_open_ino_peer(inodeno_t ino, open_ino_info_t& info)
 {
   set<mds_rank_t> all, active;
-  mds->mdsmap->get_mds_set(all);
-  mds->mdsmap->get_clientreplay_or_active_or_stopping_mds_set(active);
+  mds->get_fs()->get_mds_set(all);
+  mds->get_clientreplay_or_active_or_stopping_mds_set(active);
   if (mds->get_state() == MDSMap::STATE_REJOIN)
-    mds->mdsmap->get_mds_set(active, MDSMap::STATE_REJOIN);
+    mds->get_peer_set(active, MDSMap::STATE_REJOIN);
 
   dout(10) << "do_open_ino_peer " << ino << " active " << active
 	   << " all " << all << " checked " << info.checked << dendl;
@@ -8559,8 +8563,8 @@ void MDCache::find_ino_peers(inodeno_t ino, MDSInternalContextBase *c, mds_rank_
 void MDCache::_do_find_ino_peer(find_ino_peer_info_t& fip)
 {
   set<mds_rank_t> all, active;
-  mds->mdsmap->get_mds_set(all);
-  mds->mdsmap->get_clientreplay_or_active_or_stopping_mds_set(active);
+  mds->get_fs()->get_mds_set(all);
+  mds->get_clientreplay_or_active_or_stopping_mds_set(active);
 
   dout(10) << "_do_find_ino_peer " << fip.tid << " " << fip.ino
 	   << " active " << active << " all " << all
@@ -9449,7 +9453,7 @@ void MDCache::handle_discover(MDiscover *dis)
     // proceed if requester is in the REJOIN stage, the request is from parallel_fetch().
     // delay processing request from survivor because we may not yet choose lock states.
     if (mds->get_state() < MDSMap::STATE_REJOIN ||
-	!mds->mdsmap->is_rejoin(from)) {
+	!mds->peer_is_rejoin(from)) {
       dout(0) << "discover_reply not yet active(|still rejoining), delaying" << dendl;
       mds->wait_for_active(new C_MDS_RetryMessage(mds, dis));
       return;
@@ -9907,7 +9911,7 @@ CDir *MDCache::add_replica_dir(bufferlist::iterator& p, CInode *diri, mds_rank_t
 
 CDir *MDCache::forge_replica_dir(CInode *diri, frag_t fg, mds_rank_t from)
 {
-  assert(mds->mdsmap->get_state(from) < MDSMap::STATE_REJOIN);
+  assert(mds->get_peer_state(from) < MDSMap::STATE_REJOIN);
   
   // forge a replica.
   CDir *dir = diri->add_dirfrag( new CDir(diri, fg, this, false) );
@@ -10012,7 +10016,7 @@ int MDCache::send_dir_updates(CDir *dir, bool bcast)
 
   set<mds_rank_t> who;
   if (bcast) {
-    mds->get_mds_map()->get_active_mds_set(who);
+    mds->get_mds_map()->get_active_mds_set(mds->get_ns(), who);
   } else {
     for (compact_map<mds_rank_t,unsigned>::iterator p = dir->replicas_begin();
 	 p != dir->replicas_end();
@@ -10101,8 +10105,8 @@ void MDCache::send_dentry_link(CDentry *dn, MDRequestRef& mdr)
     // don't tell (rename) witnesses; they already know
     if (mdr.get() && mdr->more()->witnessed.count(p->first))
       continue;
-    if (mds->mdsmap->get_state(p->first) < MDSMap::STATE_REJOIN ||
-	(mds->mdsmap->get_state(p->first) == MDSMap::STATE_REJOIN &&
+    if (mds->get_peer_state(p->first) < MDSMap::STATE_REJOIN ||
+	(mds->get_peer_state(p->first) == MDSMap::STATE_REJOIN &&
 	 rejoin_gather.count(p->first)))
       continue;
     CDentry::linkage_t *dnl = dn->get_linkage();
@@ -10187,8 +10191,8 @@ void MDCache::send_dentry_unlink(CDentry *dn, CDentry *straydn, MDRequestRef& md
     if (mdr.get() && mdr->more()->witnessed.count(*it))
       continue;
 
-    if (mds->mdsmap->get_state(*it) < MDSMap::STATE_REJOIN ||
-	(mds->mdsmap->get_state(*it) == MDSMap::STATE_REJOIN &&
+    if (mds->get_peer_state(*it) < MDSMap::STATE_REJOIN ||
+	(mds->get_peer_state(*it) == MDSMap::STATE_REJOIN &&
 	 rejoin_gather.count(*it)))
       continue;
 
@@ -11013,8 +11017,8 @@ void MDCache::_fragment_stored(MDRequestRef& mdr)
   for (compact_map<mds_rank_t,unsigned>::iterator p = first->replicas_begin();
        p != first->replicas_end();
        ++p) {
-    if (mds->mdsmap->get_state(p->first) < MDSMap::STATE_REJOIN ||
-	(mds->mdsmap->get_state(p->first) == MDSMap::STATE_REJOIN &&
+    if (mds->get_peer_state(p->first) < MDSMap::STATE_REJOIN ||
+	(mds->get_peer_state(p->first) == MDSMap::STATE_REJOIN &&
 	 rejoin_gather.count(p->first)))
       continue;
 

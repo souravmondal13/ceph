@@ -42,8 +42,8 @@ void SnapServer::reset_state()
   if (mds) {  // only if I'm running in a live MDS
     snapid_t first_free = 0;
     const OSDMap *osdmap = mds->objecter->get_osdmap_read();
-    for (set<int64_t>::const_iterator p = mds->mdsmap->get_data_pools().begin();
-         p != mds->mdsmap->get_data_pools().end();
+    for (set<int64_t>::const_iterator p = mds->get_fs()->get_data_pools().begin();
+         p != mds->get_fs()->get_data_pools().end();
          ++p) {
       const pg_pool_t *pi = osdmap->get_pg_pool(*p);
       if (!pi) {
@@ -167,8 +167,8 @@ bool SnapServer::_commit(version_t tid, MMDSTableRequest *req)
     dout(7) << "commit " << tid << " destroy " << sn << " seq " << seq << dendl;
     snaps.erase(sn);
 
-    for (set<int64_t>::const_iterator p = mds->mdsmap->get_data_pools().begin();
-	 p != mds->mdsmap->get_data_pools().end();
+    for (set<int64_t>::const_iterator p = mds->get_fs()->get_data_pools().begin();
+	 p != mds->get_fs()->get_data_pools().end();
 	 ++p) {
       need_to_purge[*p].insert(sn);
       need_to_purge[*p].insert(seq);

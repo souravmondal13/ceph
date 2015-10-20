@@ -107,6 +107,9 @@ class mds_role_t
       return false;
     }
   }
+
+  bool is_none() const {return rank == MDS_RANK_NONE;}
+
 };
 std::ostream& operator<<(std::ostream &out, const mds_role_t &role);
 

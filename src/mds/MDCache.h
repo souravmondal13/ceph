@@ -167,8 +167,12 @@ public:
 
   unsigned max_dir_commit_size;
 
-  static ceph_file_layout gen_default_file_layout(const MDSMap &mdsmap);
-  static ceph_file_layout gen_default_log_layout(const MDSMap &mdsmap);
+  static ceph_file_layout gen_default_file_layout(
+      const MDSMap &mdsmap,
+      mds_namespace_t ns);
+  static ceph_file_layout gen_default_log_layout(
+      const MDSMap &mdsmap,
+      mds_namespace_t ns);
 
   ceph_file_layout default_file_layout;
   ceph_file_layout default_log_layout;

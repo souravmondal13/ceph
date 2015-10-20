@@ -842,10 +842,7 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
 
   // Calculate my effective rank (either my owned rank or my
   // standby_for_rank if in standby replay)
-
   mds_role_t role = mdsmap->get_role_gid(mds_gid_t(monc->get_global_id()));
-  // HEY do something with role.ns
-  mds_rank_t whoami = role.rank;
 
   // verify compatset
   CompatSet mdsmap_compat(get_mdsmap_compat_set_all());
@@ -880,17 +877,19 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
     }
   }
 
-  if (whoami == MDS_RANK_NONE && (
+  if (role.rank == MDS_RANK_NONE && (
       new_state == MDSMap::STATE_STANDBY_REPLAY || new_state == MDSMap::STATE_ONESHOT_REPLAY)) {
-    whoami = mdsmap->get_mds_info_gid(mds_gid_t(monc->get_global_id())).standby_for_rank;
+    role = mds_role_t(
+        mdsmap->get_mds_info().at(mds_gid_t(monc->get_global_id())).standby_for_rank,
+        role.ns);
   }
 
   // see who i am
   addr = messenger->get_myaddr();
-  dout(10) << "map says i am " << addr << " mds." << whoami << "." << incarnation
+  dout(10) << "map says i am " << addr << " mds." << role << "." << incarnation
 	   << " state " << ceph_mds_state_name(new_state) << dendl;
 
-  if (whoami == MDS_RANK_NONE) {
+  if (role.is_none()) {
     if (mds_rank != NULL) {
       // We have entered a rank-holding state, we shouldn't be back
       // here!
@@ -921,22 +920,22 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
   } else {
 
     // Did our filesystem go away?
-    if (mds_rank && mdsmap->filesystems.count(mds_rank->get_ns()) == 0) {
+    if (mds_rank && !mdsmap->filesystem_exists(mds_rank->get_ns())) {
       derr << "Filesystem disappeared " << mds_rank->get_ns() << dendl;
       respawn();
     }
 
     // Did we already hold a different rank?  MDSMonitor shouldn't try
     // to change that out from under me!
-    if (mds_rank && whoami != mds_rank->get_nodeid()) {
+    if (mds_rank && role.rank != mds_rank->get_nodeid()) {
       derr << "Invalid rank transition " << mds_rank->get_nodeid() << "->"
-           << whoami << dendl;
+           << role.rank << dendl;
       respawn();
     }
 
     // Did I previously not hold a rank?  Initialize!
     if (mds_rank == NULL) {
-      mds_rank = new MDSRankDispatcher(whoami, mds_lock, clog,
+      mds_rank = new MDSRankDispatcher(role, mds_lock, clog,
           timer, beacon, mdsmap, messenger, monc, objecter,
           new C_VoidFn(this, &MDSDaemon::respawn),
           new C_VoidFn(this, &MDSDaemon::suicide));

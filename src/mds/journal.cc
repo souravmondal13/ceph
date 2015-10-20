@@ -3041,7 +3041,7 @@ void EResetJournal::replay(MDSRank *mds)
   mds->sessionmap.wipe();
   mds->inotable->replay_reset();
 
-  if (mds->mdsmap->get_root() == mds->get_nodeid()) {
+  if (mds->get_fs()->get_root() == mds->get_nodeid()) {
     CDir *rootdir = mds->mdcache->get_root()->get_or_open_dirfrag(mds->mdcache, frag_t());
     mds->mdcache->adjust_subtree_auth(rootdir, mds->get_nodeid());   
   }

@@ -871,7 +871,7 @@ void StrayManager::update_op_limit()
 
   // Number of PGs across all data pools
   uint64_t pg_count = 0;
-  const std::set<int64_t> &data_pools = mds->mdsmap->get_data_pools();
+  const std::set<int64_t> &data_pools = mds->get_fs()->get_data_pools();
   for (std::set<int64_t>::iterator i = data_pools.begin();
        i != data_pools.end(); ++i) {
     if (osdmap->get_pg_pool(*i) == NULL) {
@@ -887,7 +887,7 @@ void StrayManager::update_op_limit()
 
   mds->objecter->put_osdmap_read();
 
-  uint64_t mds_count = mds->mdsmap->get_max_mds();
+  uint64_t mds_count = mds->get_fs()->get_max_mds();
 
   // Work out a limit based on n_pgs / n_mdss, multiplied by the user's
   // preference for how many ops per PG

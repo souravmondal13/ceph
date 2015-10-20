@@ -1665,7 +1665,8 @@ void Server::handle_slave_request(MMDSSlaveRequest *m)
     dout(3) << "not clientreplay|active yet, waiting" << dendl;
     mds->wait_for_replay(new C_MDS_RetryMessage(mds, m));
     return;
-  } else if (mds->is_clientreplay() && !mds->mdsmap->is_clientreplay(from) &&
+  } else if (mds->is_clientreplay() &&
+             !mds->peer_is_clientreplay(from) &&
 	     mdr->locks.empty()) {
     dout(3) << "not active yet, waiting" << dendl;
     mds->wait_for_active(new C_MDS_RetryMessage(mds, m));
@@ -2310,7 +2311,7 @@ CInode* Server::prepare_new_inode(MDRequestRef& mdr, CDir *dir, inodeno_t useino
     }
   }
 
-  if (!mds->mdsmap->get_inline_data_enabled() ||
+  if (!mds->get_fs()->get_inline_data_enabled() ||
       !mdr->session->connection->has_feature(CEPH_FEATURE_MDS_INLINE_DATA))
     in->inode.inline_data.version = CEPH_INLINE_NONE;
 
@@ -3086,7 +3087,7 @@ void Server::handle_client_openc(MDRequestRef& mdr)
     respond_to_request(mdr, -EINVAL);
     return;
   }
-  if (!mds->mdsmap->is_data_pool(layout.fl_pg_pool)) {
+  if (!mds->get_fs()->is_data_pool(layout.fl_pg_pool)) {
     dout(10) << " invalid data pool " << layout.fl_pg_pool << dendl;
     respond_to_request(mdr, -EINVAL);
     return;
@@ -3802,7 +3803,7 @@ void Server::handle_client_setlayout(MDRequestRef& mdr)
     respond_to_request(mdr, -EINVAL);
     return;
   }
-  if (!mds->mdsmap->is_data_pool(layout.fl_pg_pool)) {
+  if (!mds->get_fs()->is_data_pool(layout.fl_pg_pool)) {
     dout(10) << " invalid data pool " << layout.fl_pg_pool << dendl;
     respond_to_request(mdr, -EINVAL);
     return;
@@ -3892,7 +3893,7 @@ void Server::handle_client_setdirlayout(MDRequestRef& mdr)
     respond_to_request(mdr, -EINVAL);
     return;
   }
-  if (!mds->mdsmap->is_data_pool(layout.fl_pg_pool)) {
+  if (!mds->get_fs()->is_data_pool(layout.fl_pg_pool)) {
     dout(10) << " invalid data pool " << layout.fl_pg_pool << dendl;
     respond_to_request(mdr, -EINVAL);
     return;
@@ -3970,7 +3971,7 @@ int Server::parse_layout_vxattr(string name, string value, const OSDMap *osdmap,
     dout(10) << "bad layout" << dendl;
     return -EINVAL;
   }
-  if (!mds->mdsmap->is_data_pool(layout->fl_pg_pool)) {
+  if (!mds->get_fs()->is_data_pool(layout->fl_pg_pool)) {
     dout(10) << " invalid data pool " << layout->fl_pg_pool << dendl;
     return -EINVAL;
   }
@@ -4808,7 +4809,7 @@ void Server::_link_remote(MDRequestRef& mdr, bool inc, CDentry *dn, CInode *targ
   // 1. send LinkPrepare to dest (journal nlink++ prepare)
   mds_rank_t linkauth = targeti->authority().first;
   if (mdr->more()->witnessed.count(linkauth) == 0) {
-    if (!mds->mdsmap->is_clientreplay_or_active_or_stopping(linkauth)) {
+    if (!mds->peer_is_clientreplay_or_active_or_stopping(linkauth)) {
       dout(10) << " targeti auth mds." << linkauth << " is not active" << dendl;
       if (mdr->more()->waiting_on_slave.empty())
 	mds->wait_for_active_peer(linkauth, new C_MDS_RetryRequest(mdcache, mdr));
@@ -5482,7 +5483,7 @@ void Server::_unlink_local_finish(MDRequestRef& mdr,
 
 bool Server::_rmdir_prepare_witness(MDRequestRef& mdr, mds_rank_t who, CDentry *dn, CDentry *straydn)
 {
-  if (!mds->mdsmap->is_clientreplay_or_active_or_stopping(who)) {
+  if (!mds->peer_is_clientreplay_or_active_or_stopping(who)) {
     dout(10) << "_rmdir_prepare_witness mds." << who << " is not active" << dendl;
     if (mdr->more()->waiting_on_slave.empty())
       mds->wait_for_active_peer(who, new C_MDS_RetryRequest(mdcache, mdr));
@@ -6332,7 +6333,7 @@ void Server::_rename_finish(MDRequestRef& mdr, CDentry *srcdn, CDentry *destdn, 
 bool Server::_rename_prepare_witness(MDRequestRef& mdr, mds_rank_t who, set<mds_rank_t> &witnesse,
 				     CDentry *srcdn, CDentry *destdn, CDentry *straydn)
 {
-  if (!mds->mdsmap->is_clientreplay_or_active_or_stopping(who)) {
+  if (!mds->peer_is_clientreplay_or_active_or_stopping(who)) {
     dout(10) << "_rename_prepare_witness mds." << who << " is not active" << dendl;
     if (mdr->more()->waiting_on_slave.empty())
       mds->wait_for_active_peer(who, new C_MDS_RetryRequest(mdcache, mdr));
@@ -6999,7 +7000,7 @@ void Server::handle_slave_rename_prep(MDRequestRef& mdr)
       // make sure bystanders have received all lock related messages
       for (set<mds_rank_t>::iterator p = srcdnrep.begin(); p != srcdnrep.end(); ++p) {
 	if (*p == mdr->slave_to_mds ||
-	    !mds->mdsmap->is_clientreplay_or_active_or_stopping(*p))
+	    !mds->peer_is_clientreplay_or_active_or_stopping(*p))
 	  continue;
 	MMDSSlaveRequest *notify = new MMDSSlaveRequest(mdr->reqid, mdr->attempt,
 	    MMDSSlaveRequest::OP_RENAMENOTIFY);
@@ -7819,7 +7820,7 @@ struct C_MDS_mksnap_finish : public MDSInternalContext {
 /* This function takes responsibility for the passed mdr*/
 void Server::handle_client_mksnap(MDRequestRef& mdr)
 {
-  if (!mds->mdsmap->allows_snaps()) {
+  if (!mds->get_fs()->allows_snaps()) {
     // you can't make snapshots until you set an option right now
     respond_to_request(mdr, -EPERM);
     return;

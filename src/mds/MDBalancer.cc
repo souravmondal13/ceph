@@ -218,14 +218,14 @@ void MDBalancer::send_heartbeat()
 
 
   set<mds_rank_t> up;
-  mds->get_mds_map()->get_up_mds_set(up);
+  mds->get_fs()->get_up_mds_set(up);
   for (set<mds_rank_t>::iterator p = up.begin(); p != up.end(); ++p) {
     if (*p == mds->get_nodeid())
       continue;
     MHeartbeat *hb = new MHeartbeat(load, beat_epoch);
     hb->get_import_map() = import_map;
     messenger->send_message(hb,
-                            mds->mdsmap->get_inst(*p));
+                            mds->get_peer_inst(*p));
   }
 }
 
@@ -272,7 +272,7 @@ void MDBalancer::handle_heartbeat(MHeartbeat *m)
   //dout(0) << "  load is " << load << " have " << mds_load.size() << dendl;
 
   {
-    unsigned cluster_size = mds->get_mds_map()->get_num_in_mds();
+    unsigned cluster_size = mds->get_fs()->get_num_in_mds();
     if (mds_load.size() == cluster_size) {
       // let's go!
       //export_empties();  // no!
@@ -425,13 +425,13 @@ void MDBalancer::prep_rebalance(int beat)
     //we're going to randomly export to all the mds in the cluster
     my_targets.clear();
     set<mds_rank_t> up_mds;
-    mds->get_mds_map()->get_up_mds_set(up_mds);
+    mds->get_fs()->get_up_mds_set(up_mds);
     for (set<mds_rank_t>::iterator i = up_mds.begin();
 	 i != up_mds.end();
 	 ++i)
       my_targets[*i] = 0.0;
   } else {
-    int cluster_size = mds->get_mds_map()->get_num_in_mds();
+    int cluster_size = mds->get_fs()->get_num_in_mds();
     mds_rank_t whoami = mds->get_nodeid();
     rebalance_time = ceph_clock_now(g_ceph_context);
 
@@ -758,7 +758,7 @@ void MDBalancer::try_rebalance()
 bool MDBalancer::check_targets()
 {
   // get MonMap's idea of my_targets
-  const set<mds_rank_t>& map_targets = mds->mdsmap->get_mds_info(mds->get_nodeid()).export_targets;
+  const set<mds_rank_t>& map_targets = mds->get_mds_info().export_targets;
 
   bool send = false;
   bool ok = true;
@@ -1028,7 +1028,7 @@ void MDBalancer::hit_dir(utime_t now, CDir *dir, int type, int who, double amoun
 	  dir_pop >= g_conf->mds_bal_replicate_threshold) {
 	// replicate
 	float rdp = dir->pop_me.get(META_POP_IRD).get(now, mds->mdcache->decayrate);
-	rd_adj = rdp / mds->get_mds_map()->get_num_in_mds() - rdp;
+	rd_adj = rdp / mds->get_fs()->get_num_in_mds() - rdp;
 	rd_adj /= 2.0;  // temper somewhat
 
 	dout(0) << "replicating dir " << *dir << " pop " << dir_pop << " .. rdp " << rdp << " adj " << rd_adj << dendl;

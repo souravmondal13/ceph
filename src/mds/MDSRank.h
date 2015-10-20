@@ -118,32 +118,70 @@ class MDSRank {
     const mds_rank_t whoami;
     const mds_namespace_t ns;
 
-    /**
-     * When you want to ask the MDSMap about one of your peers,
-     * use this helper to identify them.
-     */
-    mds_role_t peer_role(mds_rank_t peer_rank) const
-    {
-      return mds_role_t(ns, peer_rank);
-    }
-
-    std::shared_ptr<const Filesystem> get_fs() const
-    {
-      return mdsmap->filesystems[ns];
-    }
-
     // Incarnation as seen in MDSMap at the point where a rank is
     // assigned.
     int incarnation;
 
   public:
     mds_rank_t get_nodeid() const { return whoami; }
-    //mds_namespace_t get_ns() const {return ns; }
-    uint64_t get_metadata_pool();
+    uint64_t get_metadata_pool() const;
+
+    mds_namespace_t get_ns() const {return ns;}
 
     bool is_cluster_degraded() const
     {
       return mdsmap->is_degraded(ns);
+    }
+
+    void get_clientreplay_or_active_or_stopping_mds_set(std::set<mds_rank_t>& s) const
+    {
+      mdsmap->get_clientreplay_or_active_or_stopping_mds_set(ns, s);
+    }
+
+    MDSMap::DaemonState get_peer_state(mds_rank_t who) const
+    {
+      return mdsmap->get_state(peer_role(who));
+    }
+
+    /**
+     * Return the MDSMap's daemon info for ourselves
+     */
+    MDSMap::mds_info_t get_mds_info() const;
+
+    bool peer_is_active(mds_rank_t who) const {
+      return mdsmap->is_active(peer_role(who));
+    }
+
+    bool peer_is_clientreplay(mds_rank_t who) const {
+      return mdsmap->is_clientreplay(peer_role(who));
+    }
+
+    bool peer_is_resolve(mds_rank_t who) const {
+      return mdsmap->is_resolve(peer_role(who));
+    }
+
+    bool peer_is_rejoin(mds_rank_t who) const {
+      return mdsmap->is_rejoin(peer_role(who));
+    }
+
+    bool peer_is_clientreplay_or_active_or_stopping(mds_rank_t who) const {
+      return mdsmap->is_clientreplay_or_active_or_stopping(peer_role(who));
+    }
+
+    void get_peer_set(std::set<mds_rank_t>& s, MDSMap::DaemonState state) const {
+      return mdsmap->get_mds_set(ns, s, state);
+    }
+
+    entity_inst_t get_peer_inst(mds_rank_t r) const {
+      return mdsmap->get_inst(peer_role(r));
+    }
+
+    /**
+     * Get all ranks (in this filesystem) in recovery, excluding ourselves
+     */
+    void get_recovery_peers(std::set<mds_rank_t>& s) const {
+      mdsmap->get_recovery_mds_set(ns, s);
+      s.erase(whoami);
     }
 
     // Reference to global MDS::mds_lock, so that users of MDSRank don't
@@ -163,6 +201,20 @@ class MDSRank {
     SafeTimer &timer;
 
     MDSMap *&mdsmap;
+
+    /**
+     * When you want to ask the MDSMap about one of your peers,
+     * use this helper to identify them.
+     */
+    inline mds_role_t peer_role(mds_rank_t peer_rank) const
+    {
+      return mds_role_t(ns, peer_rank);
+    }
+
+    inline std::shared_ptr<const Filesystem> get_fs() const
+    {
+      return mdsmap->get_filesystem(ns);
+    }
 
     Objecter     *objecter;
 
@@ -285,7 +337,7 @@ class MDSRank {
     }
 
     MDSRank(
-        mds_rank_t whoami_,
+        mds_role_t whoami_,
         Mutex &mds_lock_,
         LogChannelRef &clog_,
         SafeTimer &timer_,
@@ -381,7 +433,7 @@ class MDSRank {
 
     Finisher     *finisher;
 
-    MDSMap *get_mds_map() { return mdsmap; }
+    const MDSMap *get_mds_map() const { return mdsmap; }
 
     int get_req_rate() { return logger->get(l_mds_request); }
 
@@ -527,7 +579,7 @@ public:
   bool ms_dispatch(Message *m);
 
   MDSRankDispatcher(
-      mds_rank_t whoami_,
+      mds_role_t role_,
       Mutex &mds_lock_,
       LogChannelRef &clog_,
       SafeTimer &timer_,

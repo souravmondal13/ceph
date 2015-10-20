@@ -173,7 +173,7 @@ class Filesystem
     s = failed;
   }
 
-  void get_stopped_mds_set(std::set<mds_rank_t>& s) {
+  void get_stopped_mds_set(std::set<mds_rank_t>& s) const {
     s = stopped;
   }
 
@@ -199,7 +199,7 @@ class Filesystem
   /**
    * Get MDS ranks which are in but not up.
    */
-  void get_down_mds_set(std::set<mds_rank_t> *s)
+  void get_down_mds_set(std::set<mds_rank_t> *s) const
   {
     assert(s != NULL);
     s->insert(failed.begin(), failed.end());
@@ -224,7 +224,7 @@ class Filesystem
   void set_flag(int f) { flags |= f; }
   void clear_flag(int f) { flags &= ~f; }
 
-  bool get_inline_data_enabled() { return inline_data_enabled; }
+  bool get_inline_data_enabled() const { return inline_data_enabled; }
   void set_inline_data_enabled(bool enabled) { inline_data_enabled = enabled; }
 
   void set_snaps_allowed() {
@@ -232,7 +232,7 @@ class Filesystem
     ever_allowed_snaps = true;
     explicitly_allowed_snaps = true;
   }
-  bool allows_snaps() { return test_flag(CEPH_MDSMAP_ALLOW_SNAPS); }
+  bool allows_snaps() const { return test_flag(CEPH_MDSMAP_ALLOW_SNAPS); }
   void clear_snaps_allowed() { clear_flag(CEPH_MDSMAP_ALLOW_SNAPS); }
 
   void dump(Formatter *f) const;
@@ -411,6 +411,8 @@ public:
     return filesystems;
   }
   bool any_filesystems() const {return !filesystems.empty(); }
+  bool filesystem_exists(mds_namespace_t ns) const
+    {return filesystems.count(ns) > 0;}
 
   utime_t get_session_timeout() {
     return utime_t(session_timeout,0);
