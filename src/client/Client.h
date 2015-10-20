@@ -353,6 +353,7 @@ protected:
   epoch_t local_osd_epoch;
 
   int unsafe_sync_write;
+  mds_namespace_t ns;
 
 public:
   entity_name_t get_myname() { return messenger->get_myname(); } 
@@ -805,6 +806,9 @@ private:
   void _encode_filelocks(Inode *in, bufferlist& bl);
   void _release_filelocks(Fh *fh);
   void _update_lock_state(struct flock *fl, uint64_t owner, ceph_lock_state_t *lock_state);
+
+  std::shared_ptr<Filesystem> get_fs() const;
+  mds_rank_t get_random_up_mds() const;
 public:
   int mount(const std::string &mount_root, bool require_mds=false);
   void unmount();

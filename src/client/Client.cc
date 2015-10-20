@@ -254,6 +254,7 @@ Client::Client(Messenger *m, MonClient *mc)
     mounted(false), unmounting(false),
     local_osd(-1), local_osd_epoch(0),
     unsafe_sync_write(0),
+    ns(MDS_NAMESPACE_NONE),
     client_lock("Client::client_lock")
 {
   monclient->set_messenger(m);
@@ -1381,7 +1382,7 @@ mds_rank_t Client::choose_target_mds(MetaRequest *req)
 
 random_mds:
   if (mds < 0) {
-    mds = mdsmap->get_random_up_mds();
+    mds = get_random_up_mds();
     ldout(cct, 10) << "did not get mds through better means, so chose random mds " << mds << dendl;
   }
 
@@ -1395,12 +1396,12 @@ void Client::connect_mds_targets(mds_rank_t mds)
 {
   ldout(cct, 10) << "connect_mds_targets for mds." << mds << dendl;
   assert(mds_sessions.count(mds));
-  const MDSMap::mds_info_t& info = mdsmap->get_mds_info(mds);
+  const MDSMap::mds_info_t& info = mdsmap->get_mds_info().at((get_fs()->up.at(mds)));
   for (set<mds_rank_t>::const_iterator q = info.export_targets.begin();
        q != info.export_targets.end();
        ++q) {
     if (mds_sessions.count(*q) == 0 &&
-	mdsmap->is_clientreplay_or_active_or_stopping(*q)) {
+	mdsmap->is_clientreplay_or_active_or_stopping(mds_role_t(ns, *q))) {
       ldout(cct, 10) << "check_mds_sessions opening mds." << mds
 		     << " export target mds." << *q << dendl;
       _open_mds_session(*q);
@@ -1573,7 +1574,7 @@ int Client::make_request(MetaRequest *request,
 
     // choose mds
     mds_rank_t mds = choose_target_mds(request);
-    if (mds < MDS_RANK_NONE || !mdsmap->is_active_or_stopping(mds)) {
+    if (mds < MDS_RANK_NONE || !mdsmap->is_active_or_stopping(mds_role_t(ns, mds))) {
       ldout(cct, 10) << " target mds." << mds << " not active, waiting for new mdsmap" << dendl;
       wait_on_list(waiting_for_mdsmap);
       continue;
@@ -1582,13 +1583,13 @@ int Client::make_request(MetaRequest *request,
     // open a session?
     MetaSession *session = NULL;
     if (!have_open_session(mds)) {
-      if (!mdsmap->is_active_or_stopping(mds)) {
+      if (!mdsmap->is_active_or_stopping(mds_role_t(ns, mds))) {
 	ldout(cct, 10) << "no address for mds." << mds << ", waiting for new mdsmap" << dendl;
 	wait_on_list(waiting_for_mdsmap);
 
-	if (!mdsmap->is_active_or_stopping(mds)) {
+	if (!mdsmap->is_active_or_stopping(mds_role_t(ns, mds))) {
 	  ldout(cct, 10) << "hmm, still have no address for mds." << mds << ", trying a random mds" << dendl;
-	  request->resend_mds = mdsmap->get_random_up_mds();
+	  request->resend_mds = get_random_up_mds();
 	  continue;
 	}
       }
@@ -1873,7 +1874,7 @@ MetaSession *Client::_open_mds_session(mds_rank_t mds)
   MetaSession *session = new MetaSession;
   session->mds_num = mds;
   session->seq = 0;
-  session->inst = mdsmap->get_inst(mds);
+  session->inst = mdsmap->get_inst(mds_role_t(ns, mds));
   session->con = messenger->get_connection(session->inst);
   session->state = MetaSession::STATE_OPENING;
   mds_sessions[mds] = session;
@@ -2376,6 +2377,45 @@ void Client::handle_mds_map(MMDSMap* m)
   mdsmap = new MDSMap;
   mdsmap->decode(m->get_encoded());
 
+  if (oldmap->get_epoch() == 0 && mdsmap->get_epoch() > 0) {
+    // First map, work out which filesystem we should be dealing with
+    const auto &filesystems = mdsmap->get_filesystems();
+    const auto &want_ns_name = cct->_conf->client_mds_namespace;
+    if (want_ns_name == std::string("") &&
+        mdsmap->legacy_client_namespace != MDS_NAMESPACE_NONE) {
+      // They didn't ask for one, so give them the legacy default
+      ldout(cct, 4) << " client_mds_namespace unset, using "
+        << mdsmap->legacy_client_namespace << dendl;
+      ns = mdsmap->legacy_client_namespace;
+    } else {
+      ldout(cct, 4) << " looking up namespace '" << want_ns_name << "' from "
+        << filesystems.size() << " namespaces" << dendl;
+      for (auto fs : filesystems) {
+        if (fs.second->fs_name == want_ns_name) {
+          ns = fs.first;
+          break;
+        }
+      }
+    }
+
+    if (ns == MDS_NAMESPACE_NONE) {
+      // For whatever reason, we couldn't find out filesystem, so throw
+      // away this map: effect is that we will wait until we see an MDSMap
+      // where we can see the filesystem
+      // TODO: error out in the require_mds check during mount, instead of
+      // blocking always in this case (blocking is correct but annoying)
+      lderr(cct) << "requested MDS namespace '" << want_ns_name << "' not "
+                    "found in MDSMap epoch " << mdsmap->get_epoch() << dendl;
+      delete oldmap;
+      monclient->sub_got("mdsmap", mdsmap->get_epoch());
+      delete mdsmap;
+      mdsmap = new MDSMap;
+      m->put();
+      return;
+    }
+  }
+  assert(ns != MDS_NAMESPACE_NONE);
+
   // Cancel any commands for missing or laggy GIDs
   std::list<ceph_tid_t> cancel_ops;
   for (std::map<ceph_tid_t, CommandOp>::iterator i = commands.begin();
@@ -2405,13 +2445,13 @@ void Client::handle_mds_map(MMDSMap* m)
   for (map<mds_rank_t,MetaSession*>::iterator p = mds_sessions.begin();
        p != mds_sessions.end();
        ++p) {
-    int oldstate = oldmap->get_state(p->first);
-    int newstate = mdsmap->get_state(p->first);
-    if (!mdsmap->is_up(p->first) ||
-	mdsmap->get_inst(p->first) != p->second->inst) {
+    int oldstate = oldmap->get_state(mds_role_t(ns, p->first));
+    int newstate = mdsmap->get_state(mds_role_t(ns, p->first));
+    if (!get_fs()->is_up(p->first) ||
+	mdsmap->get_inst(mds_role_t(ns, p->first)) != p->second->inst) {
       p->second->con->mark_down();
-      if (mdsmap->is_up(p->first)) {
-	p->second->inst = mdsmap->get_inst(p->first);
+      if (get_fs()->is_up(p->first)) {
+	p->second->inst = mdsmap->get_inst(mds_role_t(ns, p->first));
 	// When new MDS starts to take over, notify kernel to trim unused entries
 	// in its dcache/icache. Hopefully, the kernel will release some unused
 	// inodes before the new MDS enters reconnect state.
@@ -2423,7 +2463,7 @@ void Client::handle_mds_map(MMDSMap* m)
     if (newstate == MDSMap::STATE_RECONNECT &&
 	mds_sessions.count(p->first)) {
       MetaSession *session = mds_sessions[p->first];
-      session->inst = mdsmap->get_inst(p->first);
+      session->inst = mdsmap->get_inst(mds_role_t(ns, p->first));
       session->con = messenger->get_connection(session->inst);
       send_reconnect(session);
     }
@@ -4823,17 +4863,17 @@ int Client::resolve_mds(
     if (rank_or_gid >= 0 && rank_or_gid < MAX_MDS) {
       const mds_rank_t mds_rank = mds_rank_t(rank_or_gid);
 
-      if (mdsmap->is_dne(mds_rank)) {
+      if (get_fs()->is_dne(mds_rank)) {
         lderr(cct) << __func__ << ": MDS rank " << mds_rank << " does not exist" << dendl;
         return -ENOENT;
       }
 
-      if (!mdsmap->is_up(mds_rank)) {
+      if (!get_fs()->is_up(mds_rank)) {
         lderr(cct) << __func__ << ": MDS rank " << mds_rank << " is not up" << dendl;
         return -EAGAIN;
       }
 
-      const mds_gid_t mds_gid = mdsmap->get_info(mds_rank).global_id;
+      const mds_gid_t mds_gid = get_fs()->up.at(mds_rank);
       ldout(cct, 10) << __func__ << ": resolved rank " << mds_rank << " to GID " << mds_gid << dendl;
       targets->push_back(mds_gid);
     } else {
@@ -4847,6 +4887,13 @@ int Client::resolve_mds(
       }
     }
   } else if (mds_spec == "*") {
+    // FIXME oh dear!  We won't get this far without a namespace!
+    // go back and fix the handle_mds_map logic to allow for the case
+    // where we are just issuing commands so want to permit starting
+    // without picking a namespace
+    // TODO: extend mds_spec syntax to allow '*' for all MDSs, and
+    // <namespace>.* for all MDSs assigned to a particular namespace.
+#if 0
     // It is a wildcard: use all MDSs
     const std::map<mds_gid_t, MDSMap::mds_info_t> &mds_info = mdsmap->get_mds_info();
 
@@ -4859,6 +4906,7 @@ int Client::resolve_mds(
         i != mds_info.end(); ++i) {
       targets->push_back(i->first);
     }
+#endif
   } else {
     // It did not parse as an integer, it is not a wildcard, it must be a name
     const mds_gid_t mds_gid = mdsmap->find_mds_gid_by_name(mds_spec);
@@ -5036,7 +5084,7 @@ int Client::mount(const std::string &mount_root, bool require_mds)
   if (require_mds) {
     while (1) {
       if (mdsmap->get_epoch() > 0) {
-        if (mdsmap->get_num_mds(CEPH_MDS_STATE_ACTIVE) == 0) {
+        if (mdsmap->get_num_mds(get_fs(), CEPH_MDS_STATE_ACTIVE) == 0) {
           ldout(cct, 10) << "no mds up: epoch=" << mdsmap->get_epoch() << dendl;
           return CEPH_FUSE_NO_MDS_UP;
         } else {
@@ -5224,7 +5272,8 @@ void Client::flush_cap_releases()
   for (map<mds_rank_t,MetaSession*>::iterator p = mds_sessions.begin();
        p != mds_sessions.end();
        ++p) {
-    if (p->second->release && mdsmap->is_clientreplay_or_active_or_stopping(p->first)) {
+    if (p->second->release && mdsmap->is_clientreplay_or_active_or_stopping(
+          mds_role_t(ns, p->first))) {
       if (cct->_conf->client_inject_release_failure) {
         ldout(cct, 20) << __func__ << " injecting failure to send cap release message" << dendl;
         p->second->release->put();
@@ -5299,7 +5348,7 @@ void Client::renew_caps()
        p != mds_sessions.end();
        ++p) {
     ldout(cct, 15) << "renew_caps requesting from mds." << p->first << dendl;
-    if (mdsmap->get_state(p->first) >= MDSMap::STATE_REJOIN)
+    if (mdsmap->get_state(mds_role_t(ns, p->first)) >= MDSMap::STATE_REJOIN)
       renew_caps(p->second);
   }
 }
@@ -5919,7 +5968,7 @@ force_request:
       CEPH_CAP_FILE_WR;
   }
   if (mask & CEPH_SETATTR_SIZE) {
-    if ((unsigned long)attr->st_size < mdsmap->get_max_filesize())
+    if ((unsigned long)attr->st_size < get_fs()->get_max_filesize())
       req->head.args.setattr.size = attr->st_size;
     else { //too big!
       put_request(req);
@@ -6988,7 +7037,7 @@ int Client::lookup_hash(inodeno_t ino, inodeno_t dirino, const char *name)
   path2.push_dentry(string(f));
   req->set_filepath2(path2);
 
-  int r = make_request(req, -1, -1, NULL, NULL, rand() % mdsmap->get_num_in_mds());
+  int r = make_request(req, -1, -1, NULL, NULL, rand() % get_fs()->get_num_in_mds());
   ldout(cct, 3) << "lookup_hash exit(" << ino << ", #" << dirino << "/" << name << ") = " << r << dendl;
   return r;
 }
@@ -7010,7 +7059,7 @@ int Client::lookup_ino(inodeno_t ino, Inode **inode)
   filepath path(ino);
   req->set_filepath(path);
 
-  int r = make_request(req, -1, -1, NULL, NULL, rand() % mdsmap->get_num_in_mds());
+  int r = make_request(req, -1, -1, NULL, NULL, rand() % get_fs()->get_num_in_mds());
   if (r == 0 && inode != NULL) {
     vinodeno_t vino(ino, CEPH_NOSNAP);
     unordered_map<vinodeno_t,Inode*>::iterator p = inode_map.find(vino);
@@ -7045,7 +7094,7 @@ int Client::lookup_parent(Inode *ino, Inode **parent)
   req->set_inode(ino);
 
   InodeRef target;
-  int r = make_request(req, -1, -1, &target, NULL, rand() % mdsmap->get_num_in_mds());
+  int r = make_request(req, -1, -1, &target, NULL, rand() % get_fs()->get_num_in_mds());
   // Give caller a reference to the parent ino if they provided a pointer.
   if (parent != NULL) {
     if (r == 0) {
@@ -7077,7 +7126,7 @@ int Client::lookup_name(Inode *ino, Inode *parent)
   req->set_filepath(filepath(ino->ino));
   req->set_inode(ino);
 
-  int r = make_request(req, -1, -1, NULL, NULL, rand() % mdsmap->get_num_in_mds());
+  int r = make_request(req, -1, -1, NULL, NULL, rand() % get_fs()->get_num_in_mds());
   ldout(cct, 3) << "lookup_name exit(" << ino->ino << ") = " << r << dendl;
   return r;
 }
@@ -7768,7 +7817,7 @@ int Client::_preadv_pwritev(int fd, const struct iovec *iov, unsigned iovcnt, in
 int Client::_write(Fh *f, int64_t offset, uint64_t size, const char *buf,
                   const struct iovec *iov, int iovcnt)
 {
-  if ((uint64_t)(offset+size) > mdsmap->get_max_filesize()) //too large!
+  if ((uint64_t)(offset+size) > get_fs()->get_max_filesize()) //too large!
     return -EFBIG;
 
   //ldout(cct, 7) << "write fh " << fh << " size " << size << " offset " << offset << dendl;
@@ -11140,7 +11189,7 @@ void Client::ms_handle_remote_reset(Connection *con)
       for (map<mds_rank_t,MetaSession*>::iterator p = mds_sessions.begin();
 	   p != mds_sessions.end();
 	   ++p) {
-	if (mdsmap->get_addr(p->first) == con->get_peer_addr()) {
+	if (mdsmap->get_addr(mds_role_t(ns, p->first)) == con->get_peer_addr()) {
 	  mds = p->first;
 	  s = p->second;
 	}
@@ -11493,3 +11542,22 @@ void intrusive_ptr_release(Inode *in)
 {
   in->client->put_inode(in);
 }
+
+std::shared_ptr<Filesystem> Client::get_fs() const
+{
+  assert(mdsmap->get_epoch() > 0);
+  assert(ns != MDS_NAMESPACE_NONE);
+  return mdsmap->get_filesystem(ns);
+}
+
+mds_rank_t Client::get_random_up_mds() const
+{
+  const auto fs = get_fs();
+  if (fs->up.empty())
+    return -1;
+  auto p = fs->up.begin();
+  for (int n = rand() % fs->up.size(); n; n--)
+    ++p;
+  return p->first;
+}
+
