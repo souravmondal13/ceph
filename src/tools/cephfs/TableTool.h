@@ -16,6 +16,30 @@
 
 #include "include/rados/librados.hpp"
 
+/**
+ * When you want to let the user act on a single rank in a namespace,
+ * or all of them.
+ */
+class MDSRoleSelector
+{
+  public:
+    const std::vector<mds_role_t> &get_roles() const {return roles;}
+    int parse(const MDSMap &mdsmap, std::string const &str);
+    MDSRoleSelector()
+      : ns(MDS_NAMESPACE_NONE)
+    {}
+    mds_namespace_t get_ns() const
+    {
+      return ns;
+    }
+  protected:
+    int parse_rank(
+        const MDSMap &mdsmap,
+        std::string const &str);
+    std::vector<mds_role_t> roles;
+    mds_namespace_t ns;
+};
+
 
 /**
  * Command line tool for debugging the backing store of
@@ -24,27 +48,25 @@
 class TableTool : public MDSUtility
 {
   private:
-    mds_rank_t rank;
+    MDSRoleSelector role_selector;
 
     // I/O handles
     librados::Rados rados;
     librados::IoCtx io;
 
-    int apply_rank_fn(int (TableTool::*fptr) (mds_rank_t, Formatter *), Formatter *f);
+    int apply_role_fn(int (TableTool::*fptr) (mds_role_t, Formatter *), Formatter *f);
 
-    int _reset_session_table(mds_rank_t rank, Formatter *f);
-    int _show_session_table(mds_rank_t rank, Formatter *f);
+    int _reset_session_table(mds_role_t role, Formatter *f);
+    int _show_session_table(mds_role_t role, Formatter *f);
 
-    int _show_ino_table(mds_rank_t rank, Formatter *f);
-    int _reset_ino_table(mds_rank_t rank, Formatter *f);
+    int _show_ino_table(mds_role_t role, Formatter *f);
+    int _reset_ino_table(mds_role_t role, Formatter *f);
 
     int _show_snap_table(Formatter *f);
     int _reset_snap_table(Formatter *f);
 
   public:
     void usage();
-    TableTool() :
-      rank(MDS_RANK_NONE) {}
     int main(std::vector<const char*> &argv);
 
 };

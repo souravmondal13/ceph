@@ -53,18 +53,7 @@ int TableTool::main(std::vector<const char*> &argv)
   dout(4) << "connecting to RADOS..." << dendl;
   rados.connect();
  
-  int const pool_id = mdsmap->get_metadata_pool();
-  dout(4) << "resolving pool " << pool_id << dendl;
-  std::string pool_name;
-  r = rados.pool_reverse_lookup(pool_id, &pool_name);
-  if (r < 0) {
-    derr << "Pool " << pool_id << " identified in MDS map not found in RADOS!" << dendl;
-    return r;
-  }
 
-  dout(4) << "creating IoCtx.." << dendl;
-  r = rados.ioctx_create(pool_name.c_str(), io);
-  assert(r == 0);
 
   // Require at least 3 args <action> <table> <rank>
   if (argv.size() < 3) {
@@ -72,27 +61,40 @@ int TableTool::main(std::vector<const char*> &argv)
     return -EINVAL;
   }
 
-  const std::string rank_str = std::string(argv[0]);
+  const std::string role_str = std::string(argv[0]);
   const std::string mode = std::string(argv[1]);
   const std::string table = std::string(argv[2]);
 
-  if (rank_str == "all") {
-    rank = MDS_RANK_NONE;
-  } else {
-    std::string rank_err;
-    rank = strict_strtol(rank_str.c_str(), 10, &rank_err);
-    if (!rank_err.empty()) {
-      derr << "Bad rank '" << rank_str << "'" << dendl;
-      usage();
-    }
+  r = role_selector.parse(*mdsmap, role_str);
+  if (r < 0) {
+    derr << "Bad rank selection: ;" << role_str << "'" << dendl;
+    return r;
+  }
+
+  auto fs =  mdsmap->get_filesystem(role_selector.get_ns());
+  assert(fs != nullptr);
+  int const pool_id = fs->get_metadata_pool();
+  dout(4) << "resolving pool " << pool_id << dendl;
+  std::string pool_name;
+  r = rados.pool_reverse_lookup(pool_id, &pool_name);
+  if (r < 0) {
+    derr << "Pool " << pool_id << " identified in MDS map not found in RADOS!"
+         << dendl;
+    return r;
+  }
+
+  dout(4) << "creating IoCtx.." << dendl;
+  r = rados.ioctx_create(pool_name.c_str(), io);
+  if (r != 0) {
+    return r;
   }
 
   JSONFormatter jf(true);
   if (mode == "reset") {
     if (table == "session") {
-      r = apply_rank_fn(&TableTool::_reset_session_table, &jf);
+      r = apply_role_fn(&TableTool::_reset_session_table, &jf);
     } else if (table == "inode") {
-      r = apply_rank_fn(&TableTool::_reset_ino_table, &jf);
+      r = apply_role_fn(&TableTool::_reset_ino_table, &jf);
     } else if (table == "snap") {
       r = _reset_snap_table(&jf);
     } else {
@@ -102,9 +104,9 @@ int TableTool::main(std::vector<const char*> &argv)
     }
   } else if (mode == "show") {
     if (table == "session") {
-      r = apply_rank_fn(&TableTool::_show_session_table, &jf);
+      r = apply_role_fn(&TableTool::_show_session_table, &jf);
     } else if (table == "inode") {
-      r = apply_rank_fn(&TableTool::_show_ino_table, &jf);
+      r = apply_role_fn(&TableTool::_show_ino_table, &jf);
     } else if (table == "snap") {
       r = _show_snap_table(&jf);
     } else {
@@ -130,38 +132,32 @@ int TableTool::main(std::vector<const char*> &argv)
 
 
 /**
- * For a function that takes an MDS rank as an argument and
- * returns an error code, execute it either on all ranks (if
- * this->rank is MDS_RANK_NONE), or on the rank specified
- * by this->rank.
+ * For a function that takes an MDS role as an argument and
+ * returns an error code, execute it on the roles specified
+ * by `role_selector`.
  */
-int TableTool::apply_rank_fn(int (TableTool::*fptr) (mds_rank_t, Formatter*), Formatter *f)
+int TableTool::apply_role_fn(int (TableTool::*fptr) (mds_role_t, Formatter*), Formatter *f)
 {
   assert(f != NULL);
 
   int r = 0;
-  std::set<mds_rank_t> apply_to_ranks;
-  if (rank == MDS_RANK_NONE) {
-    mdsmap->get_mds_set(apply_to_ranks);
-  } else {
-    apply_to_ranks.insert(rank);
-  }
 
   f->open_object_section("ranks");
 
-  for (std::set<mds_rank_t>::iterator rank_i = apply_to_ranks.begin();
-      rank_i != apply_to_ranks.end(); ++rank_i) {
+  for (auto role : role_selector.get_roles()) {
     std::ostringstream rank_str;
-    rank_str << *rank_i;
+    rank_str << role;
     f->open_object_section(rank_str.str().c_str());
 
     f->open_object_section("data");
-    int rank_r = (this->*fptr)(*rank_i, f);
+    int rank_r = (this->*fptr)(role, f);
     f->close_section();
     r = r ? r : rank_r;
 
     f->dump_int("result", rank_r);
     f->close_section();
+
+    
   }
 
   f->close_section();
@@ -182,21 +178,21 @@ private:
   // The RADOS object ID for the table
   std::string object_name;
 
-  // The rank in question (may be NONE)
-  mds_rank_t rank;
+  // The role in question (may be NONE)
+  mds_role_t role;
 
   // Whether this is an MDSTable subclass (i.e. has leading version field to decode)
   bool mds_table;
 
 public:
-  TableHandler(mds_rank_t r, std::string const &name, bool mds_table_)
-    : rank(r), mds_table(mds_table_)
+  TableHandler(mds_role_t r, std::string const &name, bool mds_table_)
+    : role(r), mds_table(mds_table_)
   {
     // Compose object name of the table we will dump
     std::ostringstream oss;
     oss << "mds";
-    if (rank != MDS_RANK_NONE) {
-      oss << rank;
+    if (!role.is_none()) {
+      oss << role;
     }
     oss << "_" << name;
     object_name = oss.str();
@@ -219,7 +215,7 @@ public:
           f->dump_int("version", version);
         }
         A table_inst;
-        table_inst.set_rank(rank);
+        table_inst.set_rank(role.rank);
         table_inst.decode(q);
         table_inst.dump(f);
 
@@ -238,7 +234,7 @@ public:
   int reset(librados::IoCtx *io)
   {
     A table_inst;
-    table_inst.set_rank(rank);
+    table_inst.set_rank(role.rank);
     table_inst.reset_state();
     
     // Compose new (blank) table
@@ -268,21 +264,21 @@ private:
   // The RADOS object ID for the table
   std::string object_name;
 
-  // The rank in question (may be NONE)
-  mds_rank_t rank;
+  // The role (rank may be NONE)
+  mds_role_t role;
 
   // Whether this is an MDSTable subclass (i.e. has leading version field to decode)
   bool mds_table;
 
 public:
-  TableHandlerOmap(mds_rank_t r, std::string const &name, bool mds_table_)
-    : rank(r), mds_table(mds_table_)
+  TableHandlerOmap(mds_role_t r, std::string const &name, bool mds_table_)
+    : role(r), mds_table(mds_table_)
   {
     // Compose object name of the table we will dump
     std::ostringstream oss;
     oss << "mds";
-    if (rank != MDS_RANK_NONE) {
-      oss << rank;
+    if (!role.is_none()) {
+      oss << role;
     }
     oss << "_" << name;
     object_name = oss.str();
@@ -303,7 +299,7 @@ public:
 
     // Decode the header
     A table_inst;
-    table_inst.set_rank(rank);
+    table_inst.set_rank(role.rank);
     try {
       table_inst.decode_header(header_bl);
     } catch (buffer::error &e) {
@@ -344,7 +340,7 @@ public:
   int reset(librados::IoCtx *io)
   {
     A table_inst;
-    table_inst.set_rank(rank);
+    table_inst.set_rank(role.rank);
     table_inst.reset_state();
 
     bufferlist header_bl;
@@ -360,24 +356,24 @@ public:
   }
 };
 
-int TableTool::_show_session_table(mds_rank_t rank, Formatter *f)
+int TableTool::_show_session_table(mds_role_t role, Formatter *f)
 {
-  return TableHandlerOmap<SessionMapStore>(rank, "sessionmap", false).load_and_dump(&io, f);
+  return TableHandlerOmap<SessionMapStore>(role, "sessionmap", false).load_and_dump(&io, f);
 }
 
-int TableTool::_reset_session_table(mds_rank_t rank, Formatter *f)
+int TableTool::_reset_session_table(mds_role_t role, Formatter *f)
 {
-  return TableHandlerOmap<SessionMapStore>(rank, "sessionmap", false).reset(&io);
+  return TableHandlerOmap<SessionMapStore>(role, "sessionmap", false).reset(&io);
 }
 
-int TableTool::_show_ino_table(mds_rank_t rank, Formatter *f)
+int TableTool::_show_ino_table(mds_role_t role, Formatter *f)
 {
-  return TableHandler<InoTable>(rank, "inotable", true).load_and_dump(&io, f);;
+  return TableHandler<InoTable>(role, "inotable", true).load_and_dump(&io, f);;
 }
 
-int TableTool::_reset_ino_table(mds_rank_t rank, Formatter *f)
+int TableTool::_reset_ino_table(mds_role_t role, Formatter *f)
 {
-  return TableHandler<InoTable>(rank, "inotable", true).reset(&io);
+  return TableHandler<InoTable>(role, "inotable", true).reset(&io);
 }
 
 int TableTool::_show_snap_table(Formatter *f)
@@ -386,7 +382,7 @@ int TableTool::_show_snap_table(Formatter *f)
 
   f->open_object_section("show_snap_table");
   {
-    r = TableHandler<SnapServer>(MDS_RANK_NONE, "snaptable", true).load_and_dump(&io, f);
+    r = TableHandler<SnapServer>(mds_role_t(), "snaptable", true).load_and_dump(&io, f);
     f->dump_int("result", r);
   }
   f->close_section();
@@ -396,10 +392,58 @@ int TableTool::_show_snap_table(Formatter *f)
 
 int TableTool::_reset_snap_table(Formatter *f)
 {
-  int r = TableHandler<SnapServer>(MDS_RANK_NONE, "snaptable", true).reset(&io);
+  int r = TableHandler<SnapServer>(mds_role_t(), "snaptable", true).reset(&io);
   f->open_object_section("reset_snap_status");
   f->dump_int("result", r);
   f->close_section();
   return r;
+}
+
+int MDSRoleSelector::parse_rank(
+    const MDSMap &mdsmap,
+    std::string const &str)
+{
+  if (str == "*") {
+    for (auto rank : mdsmap.get_filesystem(ns)->in) {
+      roles.push_back(mds_role_t(ns, rank));
+    }
+
+    return 0;
+  } else {
+    std::string rank_err;
+    mds_rank_t rank = strict_strtol(str.c_str(), 10, &rank_err);
+    if (!rank_err.empty()) {
+      return -EINVAL;
+    }
+    roles.push_back(mds_role_t(ns, rank));
+    return 0;
+  }
+}
+
+int MDSRoleSelector::parse(const MDSMap &mdsmap, std::string const &str)
+{
+  auto colon_pos = str.find(":");
+  if (colon_pos == std::string::npos) {
+    // An unqualified rank.  Only valid if there is only one
+    // namespace.
+    if (mdsmap.get_filesystems().size() == 1) {
+      ns = mdsmap.get_filesystems().begin()->first;
+      return parse_rank(mdsmap, str);
+    } else {
+      return -EINVAL;
+    }
+  } else if (colon_pos == 0 || colon_pos == str.size() - 1) {
+    return -EINVAL;
+  } else {
+    const std::string ns_str = str.substr(0, colon_pos);
+    const std::string rank_str = str.substr(colon_pos + 1);
+    std::shared_ptr<Filesystem> fs_ptr;
+    int r = mdsmap.parse_filesystem(ns_str, &fs_ptr);
+    if (r != 0) {
+      return r;
+    }
+    ns = fs_ptr->ns;
+    return parse_rank(mdsmap, rank_str);
+  }
 }
 
