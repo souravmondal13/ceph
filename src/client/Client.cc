@@ -2390,11 +2390,10 @@ void Client::handle_mds_map(MMDSMap* m)
     } else {
       ldout(cct, 4) << " looking up namespace '" << want_ns_name << "' from "
         << filesystems.size() << " namespaces" << dendl;
-      for (auto fs : filesystems) {
-        if (fs.second->fs_name == want_ns_name) {
-          ns = fs.first;
-          break;
-        }
+      std::shared_ptr<Filesystem> fs_ptr;
+      int r = mdsmap->parse_filesystem(want_ns_name, &fs_ptr);
+      if (r == 0) {
+        ns = fs_ptr->ns;
       }
     }
 

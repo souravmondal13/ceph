@@ -431,6 +431,11 @@ public:
     return filesystems.at(ns);
   }
 
+  int parse_filesystem(
+      std::string const &ns_str,
+      std::shared_ptr<Filesystem> *result
+      ) const;
+
   /**
    * Return true if this pool is in use by any of the filesystems
    */

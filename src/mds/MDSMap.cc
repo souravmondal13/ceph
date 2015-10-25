@@ -882,3 +882,25 @@ void Filesystem::decode(bufferlist::iterator& p)
   std::cerr << "Filesystem::decode " << fs_name << std::endl;
   DECODE_FINISH(p);
 }
+
+int MDSMap::parse_filesystem(
+      std::string const &ns_str,
+      std::shared_ptr<Filesystem> *result
+      ) const
+{
+  std::string ns_err;
+  mds_namespace_t ns = strict_strtol(ns_str.c_str(), 10, &ns_err);
+  if (!ns_err.empty() || filesystems.count(ns) == 0) {
+    for (auto fs : filesystems) {
+      if (fs.second->fs_name == ns_str) {
+        *result = fs.second;
+        return 0;
+      }
+    }
+    return -ENOENT;
+  } else {
+    *result = get_filesystem(ns);
+    return 0;
+  }
+}
+
