@@ -526,8 +526,14 @@ int DataScan::scan_inodes()
       if (r >= 0) {
         std::string read_tag;
         bufferlist::iterator q = scrub_tag_bl.begin();
-        ::decode(read_tag, q);
-        if (read_tag == filter_tag) {
+        try {
+          ::decode(read_tag, q);
+        } catch (const buffer::error &err) {
+          // Tread un-decodable case like missing tag
+          dout(20) << "corrupt tag on " << oid << ", ignoring the tag" << dendl;
+        }
+
+        if (!read_tag.empty() && read_tag == filter_tag) {
           dout(20) << "skipping " << oid << " because it has the filter_tag"
                    << dendl;
           continue;
