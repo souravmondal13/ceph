@@ -173,7 +173,12 @@ bool PGLSCephFSFilter::filter(const hobject_t &obj,
   if (!scrub_tag.empty() && xattr_data.length() > 0) {
     std::string tag_ondisk;
     bufferlist::iterator q = xattr_data.begin();
-    ::decode(tag_ondisk, q);
+    try {
+      ::decode(tag_ondisk, q);
+    } catch (const buffer::error &e) {
+      // Treat corrupt tag like non-matching tag
+      return true;
+    }
     if (tag_ondisk == scrub_tag) {
       return false;
     }
