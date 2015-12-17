@@ -462,6 +462,18 @@ if (WITH_CEPHFS)
                         ${BLKID_LIBRARIES} ${CMAKE_DL_LIBS} ${TCMALLOC_LIBS})
 endif (WITH_CEPHFS)
 
+if (WITH_PYFOO)
+  set(pyfoo_srcs
+      ceph_pyfoo.cc
+      pyfoo/PyFormatter.cc
+      pyfoo/PyFoo.cc)
+  add_executable(ceph-pyfoo ${pyfoo_srcs}
+                 $<TARGET_OBJECTS:heap_profiler_objs>)
+             set_target_properties(ceph-pyfoo PROPERTIES COMPILE_FLAGS "-I${PYTHON_INCLUDE_DIRS}")
+  target_link_libraries(ceph-pyfoo mds osdc global
+      ${PYTHON_LIBRARIES} ${BLKID_LIBRARIES} ${CMAKE_DL_LIBS} ${TCMALLOC_LIBS})
+endif (WITH_PYFOO)
+
 set(librados_config_srcs
   librados-config.cc)
 add_executable(librados-config ${librados_config_srcs}

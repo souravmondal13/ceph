@@ -218,6 +218,13 @@ option(WITH_RADOSGW "Rados Gateway is enabled" ON)
 #option for CephFS
 option(WITH_CEPHFS "CephFS is enabled" ON)
 
+#option for PyFoo
+option(WITH_PYFOO "PyFoo is enabled" ON)
+if(WITH_PYFOO)
+    set(Python_ADDITIONAL_VERSIONS 2.7)
+    find_package(PythonLibs 2.7 EXACT REQUIRED)
+endif(WITH_PYFOO)
+
 option(WITH_THREAD_SAFE_RES_QUERY "res_query is thread safe" OFF)
 if(WITH_THREAD_SAFE_RES_QUERY)
     set(HAVE_THREAD_SAFE_RES_QUERY 1 CACHE INTERNAL "Thread safe res_query supported.")
