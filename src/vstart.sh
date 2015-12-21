@@ -24,6 +24,7 @@ if [ -e CMakeCache.txt ]; then
   [ -z "$CEPH_BIN" ] && CEPH_BIN=src
   [ -z "$CEPH_LIB" ] && CEPH_LIB=src
   [ -z "$OBJCLASS_PATH" ] && OBJCLASS_PATH=src/cls
+  [ -z "$PYFOO_PATH" ] && PYFOO_PATH=$SRC_ROOT/src/pybind/pyfoo
 
   # Gather symlinks to EC plugins in one dir, because with CMake they
   # are built into multiple locations
@@ -456,6 +457,7 @@ fi
         keyring = $keyring_fn
         log file = $CEPH_OUT_DIR/\$name.\$pid.log
         admin socket = $CEPH_OUT_DIR/\$name.\$pid.asok
+        pyfoo_module_path = $PYFOO_PATH
 
 [mds]
 $DAEMONOPTS

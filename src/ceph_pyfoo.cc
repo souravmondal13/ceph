@@ -14,13 +14,14 @@
  *
  */
 
+#include "pyfoo/PyFoo.h"
+
 #include "include/types.h"
 #include "common/config.h"
 #include "common/ceph_argparse.h"
 #include "common/errno.h"
 #include "global/global_init.h"
 
-#include "pyfoo/PyFoo.h"
 
 int main(int argc, const char **argv)
 {

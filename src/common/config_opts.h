@@ -1178,6 +1178,9 @@ OPTION(rgw_objexp_time_step, OPT_U32, 4096) // number of seconds for rounding th
 OPTION(rgw_objexp_hints_num_shards, OPT_U32, 127) // maximum number of parts in which the hint index is stored in
 OPTION(rgw_objexp_chunk_size, OPT_U32, 100) // maximum number of entries in a single operation when processing objexp data
 
+OPTION(pyfoo_module_path, OPT_STR, CEPH_PKGLIBDIR "/pyfoo") // where to load python modules from
+OPTION(pyfoo_modules, OPT_STR, "rest")  // Which modules to load
+
 OPTION(mutex_perf_counter, OPT_BOOL, false) // enable/disable mutex perf counter
 OPTION(throttler_perf_counter, OPT_BOOL, true) // enable/disable throttler perf counter
 

@@ -11,16 +11,8 @@
  * Foundation.  See file COPYING.
  */
 
-// Python.h comes first because otherwise it clobbers ceph's assert
-#include "Python.h"
-// Python's pyconfig-64.h conflicts with ceph's acconfig.h
-#undef HAVE_SYS_WAIT_H
-#undef HAVE_UNISTD_H
-#undef HAVE_UTIME_H
-#undef _POSIX_C_SOURCE
-#undef _XOPEN_SOURCE
-
 #include "PyFoo.h"
+
 #include "mon/MonClient.h"
 #include "PyFormatter.h"
 
@@ -182,63 +174,86 @@ bool PyFoo::ms_get_authorizer(int dest_type, AuthAuthorizer **authorizer,
   return *authorizer != NULL;
 }
 
-static PyObject *global_pyhandle = NULL;
 
-/* Return the number of arguments of the application command line */
+
+static PyFoo *global_handle = NULL;
+
 static PyObject*
-emb_handle(PyObject *self, PyObject *args)
+ceph_state_get(PyObject *self, PyObject *args)
 {
-  Py_INCREF(global_pyhandle);
-  return global_pyhandle;
+  char *what = NULL;
+  if (!PyArg_ParseTuple(args, "s:ceph_state_get", &what)) {
+    return NULL;
+  }
+
+  return global_handle->get_python(what);
 }
 
-static PyMethodDef EmbMethods[] = {
-    {"handle", emb_handle, METH_NOARGS,
-     "Get the magic handle"},
+static PyMethodDef CephStateMethods[] = {
+    {"get", ceph_state_get, METH_VARARGS,
+     "Get a cluster object"},
     {NULL, NULL, 0, NULL}
 };
 
+
+PyObject *PyFoo::get_python(const std::string &what)
+{
+  if (what == "mdsmap") {
+    PyFormatter f;
+    mdsmap->dump(&f);
+    return f.get();
+  } else if (what == "osdmap") {
+    const OSDMap *osd_map = objecter->get_osdmap_read();
+    PyFormatter f;
+    osd_map->dump(&f);
+    objecter->put_osdmap_read();
+    return f.get();
+  } else {
+    Py_RETURN_NONE;
+  }
+}
+
 int PyFoo::main(vector<const char *> args)
 {
-  // Construct the special python object from an MDSMap
-  PyFormatter f;
-  mdsmap->dump(&f);
-  derr << "dumped!" << dendl;
-  global_pyhandle = f.get();
-
-
-  PyObject *dumped_mdsmap = f.get();
-  Py_DECREF(dumped_mdsmap);
+  global_handle = this;
 
   PyObject *pName, *pModule, *pFunc;
   PyObject *pArgs, *pValue;
 
   Py_Initialize();
 
-  Py_InitModule("emb", EmbMethods);
+  Py_InitModule("ceph_state", CephStateMethods);
+
+  const std::string module_path = g_conf->pyfoo_module_path;
+  dout(4) << "Loading modules from '" << module_path << "'" << dendl;
+  std::string sys_path = Py_GetPath();
+
+  // We need site-packages for flask et al, unless we choose to
+  // embed them in the ceph package.  site-packages is an interpreter-specific
+  // thing, so as an embedded interpreter we're responsible for picking
+  // this.  FIXME: don't hardcode this.
+  std::string site_packages = "/usr/lib/python2.7/site-packages:/usr/lib64/python2.7/site-packages";
+  sys_path += ":";
+  sys_path += site_packages;
+
+  sys_path += ":";
+  sys_path += module_path;
+  dout(10) << "Computed sys.path '" << sys_path << "'" << dendl;
+  PySys_SetPath((char*)(sys_path.c_str()));
 
   // Construct pModule
-  pName = PyString_FromString("foo");
+  // TODO load pyfoo_modules list, run them all in a thread each.
+  pName = PyString_FromString("rest");
   pModule = PyImport_Import(pName);
   Py_DECREF(pName);
 
   if (pModule != NULL) {
-      pFunc = PyObject_GetAttrString(pModule, "multiply");
-      /* pFunc is a new reference */
-
+      pFunc = PyObject_GetAttrString(pModule, "serve");
       if (pFunc && PyCallable_Check(pFunc)) {
-          pArgs = PyTuple_New(2);
-
-          pValue = PyInt_FromLong(12);
-          PyTuple_SetItem(pArgs, 0, pValue);
-
-          pValue = PyInt_FromLong(12);
-          PyTuple_SetItem(pArgs, 1, pValue);
-
+          pArgs = PyTuple_New(0);
           pValue = PyObject_CallObject(pFunc, pArgs);
           Py_DECREF(pArgs);
           if (pValue != NULL) {
-              printf("Result of call: %ld\n", PyInt_AsLong(pValue));
               Py_DECREF(pValue);
           } else {
               Py_DECREF(pFunc);

@@ -14,6 +14,15 @@
 #ifndef CEPH_PYFOO_H_
 #define CEPH_PYFOO_H_
 
+// Python.h comes first because otherwise it clobbers ceph's assert
+#include "Python.h"
+// Python's pyconfig-64.h conflicts with ceph's acconfig.h
+#undef HAVE_SYS_WAIT_H
+#undef HAVE_UNISTD_H
+#undef HAVE_UTIME_H
+#undef _POSIX_C_SOURCE
+#undef _XOPEN_SOURCE
+
 #include "osdc/Objecter.h"
 #include "mds/MDSMap.h"
 #include "messages/MMDSMap.h"
@@ -50,6 +59,8 @@ public:
   void shutdown();
   void usage() {}
   int main(vector<const char *> args);
+
+  PyObject *get_python(const std::string &what);
 };
 
 #endif /* MDS_UTILITY_H_ */
