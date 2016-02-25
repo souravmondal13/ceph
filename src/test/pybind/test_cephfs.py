@@ -13,6 +13,10 @@ def teardown_module():
     global cephfs
     cephfs.shutdown()
 
+def test_conf_get():
+    fsid = cephfs.conf_get("fsid")
+    assert(fsid != "")
+
 def test_version():
     cephfs.version()
 
@@ -25,8 +29,11 @@ def test_syncfs():
 
 def test_directory():
     cephfs.mkdir("/temp-directory", 0755)
+    cephfs.mkdirs("/temp-directory/foo/bar", 0755)
     cephfs.chdir("/temp-directory")
     assert_equal(cephfs.getcwd(), "/temp-directory")
+    cephfs.rmdir("/temp-directory/foo/bar")
+    cephfs.rmdir("/temp-directory/foo")
     cephfs.rmdir("/temp-directory")
     assert_raises(libcephfs.ObjectNotFound, cephfs.chdir, "/temp-directory")
 
