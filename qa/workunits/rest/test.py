@@ -166,9 +166,9 @@ if __name__ == '__main__':
     r = expect('mds/dump.xml', 'GET', 200, 'xml')
     assert(r.tree.find('output/mdsmap/created') is not None)
 
-    expect('osd/pool/create?pg_num=1&pool=fsmetadata', 'PUT', 200, '')
-    expect('osd/pool/create?pg_num=1&pool=fsdata', 'PUT', 200, '')
-    expect('fs/new?fs_name=default&metadata=fsmetadata&data=fsdata', 'PUT', 200, '')
+    expect('osd/pool/create?pg_num=1&pool=cephfs_metadata', 'PUT', 200, '')
+    expect('osd/pool/create?pg_num=1&pool=cephfs_data', 'PUT', 200, '')
+    expect('fs/new?fs_name=cephfs&metadata=cephfs_metadata&data=cephfs_data', 'PUT', 200, '')
     expect('osd/pool/create?pool=data2&pg_num=10', 'PUT', 200, '')
     r = expect('osd/dump', 'GET', 200, 'json', JSONHDR)
     pools = r.myjson['output']['pools']
@@ -196,9 +196,9 @@ if __name__ == '__main__':
     r = expect('mds/stat.json', 'GET', 200, 'json')
     expect('mds/set?var=max_mds&val=2', 'PUT', 200, '')
     r = expect('mds/stat.json', 'GET', 200, 'json')
-    assert('info' in r.myjson['output']['mdsmap'])
+    assert('epoch' in r.myjson['output']['fsmap'])
     r = expect('mds/stat.xml', 'GET', 200, 'xml')
-    assert(r.tree.find('output/mds_stat/mdsmap/info') is not None)
+    assert(r.tree.find('output/mds_stat/fsmap/epoch') is not None)
 
     # more content tests below, just check format here
     expect('mon/dump.json', 'GET', 200, 'json')
