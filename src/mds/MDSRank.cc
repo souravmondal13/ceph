@@ -1384,7 +1384,6 @@ void MDSRankDispatcher::handle_mds_map(
   state = mdsmap->get_state_gid(mds_gid);
   if (state != oldstate) {
     last_state = oldstate;
-    incarnation = mdsmap->get_inc_gid(mds_gid);
   }
 
   version_t epoch = m->get_epoch();
@@ -1437,10 +1436,6 @@ void MDSRankDispatcher::handle_mds_map(
       messenger->set_myname(entity_name_t::MDS(whoami));
     }
   }
-
-  // tell objecter my incarnation
-  if (objecter->get_client_incarnation() != incarnation)
-    objecter->set_client_incarnation(incarnation);
 
   // for debug
   if (g_conf->mds_dump_cache_on_map)

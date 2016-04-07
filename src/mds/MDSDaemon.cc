@@ -922,7 +922,6 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
   mdsmap = new MDSMap;
   mdsmap->decode(m->get_encoded());
   const MDSMap::DaemonState new_state = mdsmap->get_state_gid(mds_gid_t(monc->get_global_id()));
-  const int incarnation = mdsmap->get_inc_gid(mds_gid_t(monc->get_global_id()));
 
   monc->sub_got("mdsmap", mdsmap->get_epoch());
 
@@ -970,7 +969,7 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
 
   // see who i am
   addr = messenger->get_myaddr();
-  dout(10) << "map says i am " << addr << " mds." << whoami << "." << incarnation
+  dout(10) << "map says i am " << addr << " mds." << whoami
 	   << " state " << ceph_mds_state_name(new_state) << dendl;
 
   if (whoami == MDS_RANK_NONE) {
@@ -1017,6 +1016,7 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
           timer, beacon, mdsmap, messenger, monc, objecter,
           new C_VoidFn(this, &MDSDaemon::respawn),
           new C_VoidFn(this, &MDSDaemon::suicide));
+      objecter->set_client_incarnation(mdsmap->get_epoch());
       dout(10) <<  __func__ << ": initializing MDS rank "
                << mds_rank->get_nodeid() << dendl;
       mds_rank->init();

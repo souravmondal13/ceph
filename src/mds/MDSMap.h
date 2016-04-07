@@ -602,11 +602,6 @@ public:
     }
   }
 
-  int get_inc_gid(mds_gid_t gid) {
-    if (mds_info.count(gid))
-      return mds_info[gid].inc;
-    return -1;
-  }
   void encode(bufferlist& bl, uint64_t features) const;
   void decode(bufferlist::iterator& p);
   void decode(bufferlist& bl) {
