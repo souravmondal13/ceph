@@ -2106,7 +2106,7 @@ void Locker::handle_inode_file_caps(MInodeFileCaps *m)
 
   // ok
   CInode *in = mdcache->get_inode(m->get_ino());
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
 
   assert(in);
   assert(in->is_auth());
@@ -3700,7 +3700,7 @@ void Locker::handle_reqrdlock(SimpleLock *lock, MLock *m)
 /* This function DOES put the passed message before returning */
 void Locker::handle_simple_lock(SimpleLock *lock, MLock *m)
 {
-  int from = m->get_asker();
+  mds_rank_t from = m->get_asker();
   
   dout(10) << "handle_simple_lock " << *m
 	   << " on " << *lock << " " << *lock->get_parent() << dendl;
@@ -4936,7 +4936,7 @@ void Locker::file_recover(ScatterLock *lock)
 void Locker::handle_file_lock(ScatterLock *lock, MLock *m)
 {
   CInode *in = static_cast<CInode*>(lock->get_parent());
-  int from = m->get_asker();
+  mds_rank_t from = m->get_asker();
 
   if (mds->is_rejoin()) {
     if (in->is_rejoining()) {

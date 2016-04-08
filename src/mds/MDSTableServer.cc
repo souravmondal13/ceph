@@ -54,7 +54,7 @@ public:
 void MDSTableServer::handle_prepare(MMDSTableRequest *req)
 {
   dout(7) << "handle_prepare " << *req << dendl;
-  mds_rank_t from = mds_rank_t(req->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(req);
   bufferlist bl = req->bl;
 
   _prepare(req->bl, req->reqid, from);
@@ -77,7 +77,7 @@ void MDSTableServer::_prepare_logged(MMDSTableRequest *req, version_t tid)
 
   MMDSTableRequest *reply = new MMDSTableRequest(table, TABLESERVER_OP_AGREE, req->reqid, tid);
   reply->bl = req->bl;
-  mds->send_message_mds(reply, mds_rank_t(req->get_source().num()));
+  mds->send_message_mds(reply, mds->get_peer_rank(req));
   req->put();
 }
 
@@ -132,7 +132,7 @@ void MDSTableServer::_commit_logged(MMDSTableRequest *req)
   assert(g_conf->mds_kill_mdstable_at != 6);
 
   MMDSTableRequest *reply = new MMDSTableRequest(table, TABLESERVER_OP_ACK, req->reqid, req->get_tid());
-  mds->send_message_mds(reply, mds_rank_t(req->get_source().num()));
+  mds->send_message_mds(reply, mds->get_peer_rank(req));
   req->put();
 }
 

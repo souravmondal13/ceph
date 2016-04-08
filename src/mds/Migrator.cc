@@ -853,14 +853,15 @@ void Migrator::handle_export_discover_ack(MExportDirDiscoverAck *m)
 {
   CDir *dir = cache->get_dirfrag(m->get_dirfrag());
   assert(dir);
+
+  const mds_rank_t from = mds->get_peer_rank(m);
   
-  dout(7) << "export_discover_ack from " << m->get_source()
-	  << " on " << *dir << dendl;
+  dout(7) << "export_discover_ack from " << from << " on " << *dir << dendl;
 
   map<CDir*,export_state_t>::iterator it = export_state.find(dir);
   if (it == export_state.end() ||
       it->second.tid != m->get_tid() ||
-      it->second.peer != mds_rank_t(m->get_source().num())) {
+      it->second.peer != from) {
     dout(7) << "must have aborted" << dendl;
   } else {
     assert(it->second.state == EXPORT_DISCOVERING);
@@ -1114,6 +1115,8 @@ void Migrator::get_export_client_set(CInode *in, set<client_t>& client_set)
 /* This function DOES put the passed message before returning*/
 void Migrator::handle_export_prep_ack(MExportDirPrepAck *m)
 {
+  const mds_rank_t from = mds->get_peer_rank(m);
+
   CDir *dir = cache->get_dirfrag(m->get_dirfrag());
   assert(dir);
 
@@ -1122,7 +1125,7 @@ void Migrator::handle_export_prep_ack(MExportDirPrepAck *m)
   map<CDir*,export_state_t>::iterator it = export_state.find(dir);
   if (it == export_state.end() ||
       it->second.tid != m->get_tid() ||
-      it->second.peer != mds_rank_t(m->get_source().num())) {
+      it->second.peer != from) {
     // export must have aborted.  
     dout(7) << "export must have aborted" << dendl;
     m->put();
@@ -1731,7 +1734,7 @@ void Migrator::handle_export_notify_ack(MExportDirNotifyAck *m)
 {
   CDir *dir = cache->get_dirfrag(m->get_dirfrag());
   assert(dir);
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
 
   if (export_state.count(dir)) {
     export_state_t& stat = export_state[dir];
@@ -1985,7 +1988,7 @@ void Migrator::handle_export_cancel(MExportDirCancel *m)
 /* This function DOES put the passed message before returning*/
 void Migrator::handle_export_prep(MExportDirPrep *m)
 {
-  mds_rank_t oldauth = mds_rank_t(m->get_source().num());
+  const mds_rank_t oldauth = mds->get_peer_rank(m);
   assert(oldauth != mds->get_nodeid());
 
   CDir *dir;
@@ -2210,7 +2213,7 @@ void Migrator::handle_export_dir(MExportDir *m)
   assert(it->second.tid == m->get_tid());
 
   utime_t now = ceph_clock_now(g_ceph_context);
-  mds_rank_t oldauth = mds_rank_t(m->get_source().num());
+  const mds_rank_t oldauth = mds->get_peer_rank(m);
   dout(7) << "handle_export_dir importing " << *dir << " from " << oldauth << dendl;
   assert(dir->is_auth() == false);
 
@@ -2220,7 +2223,7 @@ void Migrator::handle_export_dir(MExportDir *m)
   cache->show_subtrees();
 
   C_MDS_ImportDirLoggedStart *onlogged = new C_MDS_ImportDirLoggedStart(
-      this, dir, mds_rank_t(m->get_source().num()));
+      this, dir, oldauth);
 
   // start the journal entry
   EImportStart *le = new EImportStart(mds->mdlog, dir->dirfrag(), m->bounds);
@@ -2962,7 +2965,7 @@ void Migrator::handle_export_notify(MExportDirNotify *m)
 {
   CDir *dir = cache->get_dirfrag(m->get_dirfrag());
 
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
   mds_authority_t old_auth = m->get_old_auth();
   mds_authority_t new_auth = m->get_new_auth();
   
@@ -3052,7 +3055,8 @@ public:
 /* This function DOES put the passed message before returning*/
 void Migrator::handle_export_caps(MExportCaps *ex)
 {
-  dout(10) << "handle_export_caps " << *ex << " from " << ex->get_source() << dendl;
+  const mds_rank_t from = mds->get_peer_rank(ex);
+  dout(10) << "handle_export_caps " << *ex << " from mds." << from << dendl;
   CInode *in = cache->get_inode(ex->ino);
   
   assert(in);
@@ -3062,8 +3066,7 @@ void Migrator::handle_export_caps(MExportCaps *ex)
   if (in->is_frozen())
     return;
 
-  C_M_LoggedImportCaps *finish = new C_M_LoggedImportCaps(
-      this, in, mds_rank_t(ex->get_source().num()));
+  C_M_LoggedImportCaps *finish = new C_M_LoggedImportCaps(this, in, from);
   finish->client_map = ex->client_map;
 
   // decode new caps

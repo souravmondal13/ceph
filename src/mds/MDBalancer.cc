@@ -234,8 +234,9 @@ void MDBalancer::handle_heartbeat(MHeartbeat *m)
 {
   typedef map<mds_rank_t, mds_load_t> mds_load_map_t;
 
-  mds_rank_t who = mds_rank_t(m->get_source().num());
-  dout(25) << "=== got heartbeat " << m->get_beat() << " from " << m->get_source().num() << " " << m->get_load() << dendl;
+  const mds_rank_t who = mds->get_peer_rank(m);
+  dout(25) << "=== got heartbeat " << m->get_beat() << " from " << who
+           << " " << m->get_load() << dendl;
 
   if (!mds->is_active())
     goto out;

@@ -1616,7 +1616,7 @@ void Server::dispatch_client_request(MDRequestRef& mdr)
 void Server::handle_slave_request(MMDSSlaveRequest *m)
 {
   dout(4) << "handle_slave_request " << m->get_reqid() << " from " << m->get_source() << dendl;
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
 
   if (logger) logger->inc(l_mdss_handle_slave_request);
 
@@ -1705,7 +1705,7 @@ void Server::handle_slave_request(MMDSSlaveRequest *m)
 /* This function DOES put the passed message before returning*/
 void Server::handle_slave_request_reply(MMDSSlaveRequest *m)
 {
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
   
   if (!mds->is_clientreplay() && !mds->is_active() && !mds->is_stopping()) {
     dout(3) << "not clientreplay|active yet, waiting" << dendl;
@@ -2067,7 +2067,7 @@ void Server::handle_slave_auth_pin(MDRequestRef& mdr)
 void Server::handle_slave_auth_pin_ack(MDRequestRef& mdr, MMDSSlaveRequest *ack)
 {
   dout(10) << "handle_slave_auth_pin_ack on " << *mdr << " " << *ack << dendl;
-  mds_rank_t from = mds_rank_t(ack->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(ack);
 
   // added auth pins?
   set<MDSCacheObject*> pinned;
@@ -5262,7 +5262,7 @@ void Server::handle_slave_link_prep_ack(MDRequestRef& mdr, MMDSSlaveRequest *m)
 {
   dout(10) << "handle_slave_link_prep_ack " << *mdr 
 	   << " " << *m << dendl;
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
 
   assert(g_conf->mds_kill_link_at != 11);
 
@@ -5738,7 +5738,7 @@ void Server::handle_slave_rmdir_prep_ack(MDRequestRef& mdr, MMDSSlaveRequest *ac
   dout(10) << "handle_slave_rmdir_prep_ack " << *mdr 
 	   << " " << *ack << dendl;
 
-  mds_rank_t from = mds_rank_t(ack->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(ack);
 
   mdr->more()->slaves.insert(from);
   mdr->more()->witnessed.insert(from);
@@ -7736,7 +7736,7 @@ void Server::handle_slave_rename_prep_ack(MDRequestRef& mdr, MMDSSlaveRequest *a
   dout(10) << "handle_slave_rename_prep_ack " << *mdr 
 	   << " witnessed by " << ack->get_source()
 	   << " " << *ack << dendl;
-  mds_rank_t from = mds_rank_t(ack->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(ack);
 
   // note slave
   mdr->more()->slaves.insert(from);
@@ -7775,7 +7775,7 @@ void Server::handle_slave_rename_notify_ack(MDRequestRef& mdr, MMDSSlaveRequest 
   dout(10) << "handle_slave_rename_notify_ack " << *mdr << " from mds."
 	   << ack->get_source() << dendl;
   assert(mdr->is_slave());
-  mds_rank_t from = mds_rank_t(ack->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(ack);
 
   if (mdr->more()->waiting_on_slave.count(from)) {
     mdr->more()->waiting_on_slave.erase(from);

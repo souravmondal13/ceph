@@ -3079,7 +3079,7 @@ void MDCache::set_recovery_set(set<mds_rank_t>& s)
 void MDCache::handle_resolve(MMDSResolve *m)
 {
   dout(7) << "handle_resolve from " << m->get_source() << dendl;
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
 
   if (mds->get_state() < MDSMap::STATE_RESOLVE) {
     if (mds->get_want_state() == CEPH_MDS_STATE_RESOLVE) {
@@ -3294,7 +3294,7 @@ void MDCache::maybe_resolve_finish()
 void MDCache::handle_resolve_ack(MMDSResolveAck *ack)
 {
   dout(10) << "handle_resolve_ack " << *ack << " from " << ack->get_source() << dendl;
-  mds_rank_t from = mds_rank_t(ack->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(ack);
 
   if (!resolve_ack_gather.count(from) ||
       mds->mdsmap->get_state(from) < MDSMap::STATE_RESOLVE) {
@@ -4241,7 +4241,7 @@ void MDCache::handle_cache_rejoin(MMDSCacheRejoin *m)
  */
 void MDCache::handle_cache_rejoin_weak(MMDSCacheRejoin *weak)
 {
-  mds_rank_t from = mds_rank_t(weak->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(weak);
 
   // possible response(s)
   MMDSCacheRejoin *ack = 0;      // if survivor
@@ -4569,7 +4569,7 @@ CDir *MDCache::rejoin_invent_dirfrag(dirfrag_t df)
 /* This functions DOES NOT put the passed message before returning */
 void MDCache::handle_cache_rejoin_strong(MMDSCacheRejoin *strong)
 {
-  mds_rank_t from = mds_rank_t(strong->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(strong);
 
   // only a recovering node will get a strong rejoin.
   assert(mds->is_rejoin());
@@ -4846,7 +4846,7 @@ void MDCache::handle_cache_rejoin_strong(MMDSCacheRejoin *strong)
 void MDCache::handle_cache_rejoin_ack(MMDSCacheRejoin *ack)
 {
   dout(7) << "handle_cache_rejoin_ack from " << ack->get_source() << dendl;
-  mds_rank_t from = mds_rank_t(ack->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(ack);
 
   // for sending cache expire message
   set<CInode*> isolated_inodes;
@@ -6918,7 +6918,7 @@ void MDCache::standby_trim_segment(LogSegment *ls)
 /* This function DOES put the passed message before returning */
 void MDCache::handle_cache_expire(MCacheExpire *m)
 {
-  mds_rank_t from = mds_rank_t(m->get_from());
+  const mds_rank_t from = mds->get_peer_rank(m);
   
   dout(7) << "cache_expire from mds." << from << dendl;
 
@@ -8494,7 +8494,7 @@ void MDCache::handle_open_ino_reply(MMDSOpenInoReply *m)
   dout(10) << "handle_open_ino_reply " << *m << dendl;
 
   inodeno_t ino = m->ino;
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
   if (opening_inodes.count(ino)) {
     open_ino_info_t& info = opening_inodes[ino];
 
@@ -8682,7 +8682,7 @@ void MDCache::handle_find_ino_reply(MMDSFindInoReply *m)
       return;
     }
 
-    mds_rank_t from = mds_rank_t(m->get_source().num());
+    const mds_rank_t from = mds->get_peer_rank(m);
     if (fip.checking == from)
       fip.checking = -1;
     fip.checked.insert(from);
@@ -8778,7 +8778,7 @@ MDRequestRef MDCache::request_start(MClientRequest *req)
 
 MDRequestRef MDCache::request_start_slave(metareqid_t ri, __u32 attempt, Message *m)
 {
-  int by = m->get_source().num();
+  mds_rank_t by = mds->get_peer_rank(m);
   MDRequestImpl::Params params;
   params.reqid = ri;
   params.attempt = attempt;
@@ -9514,7 +9514,7 @@ void MDCache::handle_discover(MDiscover *dis)
   assert(from != whoami);
 
   if (mds->get_state() <= MDSMap::STATE_REJOIN) {
-    mds_rank_t from = mds_rank_t(dis->get_source().num());
+    const mds_rank_t from = mds->get_peer_rank(dis);
     // proceed if requester is in the REJOIN stage, the request is from parallel_fetch().
     // delay processing request from survivor because we may not yet choose lock states.
     if (mds->get_state() < MDSMap::STATE_REJOIN ||
@@ -9803,7 +9803,7 @@ void MDCache::handle_discover_reply(MDiscoverReply *m)
     dout(7) << " flag error, dentry = " << m->get_error_dentry() << dendl;
 
   list<MDSInternalContextBase*> finished, error;
-  mds_rank_t from = mds_rank_t(m->get_source().num());
+  const mds_rank_t from = mds->get_peer_rank(m);
 
   // starting point
   CInode *cur = get_inode(m->get_base_ino());
@@ -9847,7 +9847,7 @@ void MDCache::handle_discover_reply(MDiscoverReply *m)
     frag_t fg;
     CDir *curdir = 0;
     if (next == MDiscoverReply::DIR) {
-      curdir = add_replica_dir(p, cur, mds_rank_t(m->get_source().num()), finished);
+      curdir = add_replica_dir(p, cur, from, finished);
       if (cur->ino() == m->get_base_ino() && curdir->get_frag() != m->get_base_dir_frag()) {
 	assert(m->get_wanted_base_dir());
 	cur->take_dir_waiting(m->get_base_dir_frag(), finished);
@@ -10273,10 +10273,12 @@ void MDCache::send_dentry_unlink(CDentry *dn, CDentry *straydn, MDRequestRef& md
 /* This function DOES put the passed message before returning */
 void MDCache::handle_dentry_unlink(MDentryUnlink *m)
 {
+  const mds_rank_t from = mds->get_peer_rank(m);
+
   // straydn
   CDentry *straydn = NULL;
   if (m->straybl.length())
-    straydn = add_replica_stray(m->straybl, mds_rank_t(m->get_source().num()));
+    straydn = add_replica_stray(m->straybl, from);
 
   CDir *dir = get_dirfrag(m->get_dirfrag());
   if (!dir) {
@@ -11197,7 +11199,9 @@ void MDCache::_fragment_finish(dirfrag_t basedirfrag, list<CDir*>& resultfrags)
 /* This function DOES put the passed message before returning */
 void MDCache::handle_fragment_notify(MMDSFragmentNotify *notify)
 {
-  dout(10) << "handle_fragment_notify " << *notify << " from " << notify->get_source() << dendl;
+  const mds_rank_t from = mds->get_peer_rank(notify);
+
+  dout(10) << "handle_fragment_notify " << *notify << " from mds." << from << dendl;
 
   if (mds->get_state() < MDSMap::STATE_REJOIN) {
     notify->put();
@@ -11232,7 +11236,7 @@ void MDCache::handle_fragment_notify(MMDSFragmentNotify *notify)
     // add new replica dirs values
     bufferlist::iterator p = notify->basebl.begin();
     while (!p.end())
-      add_replica_dir(p, diri, mds_rank_t(notify->get_source().num()), waiters);
+      add_replica_dir(p, diri, from, waiters);
 
     mds->queue_waiters(waiters);
   } else {
