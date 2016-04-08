@@ -400,9 +400,6 @@ class MDSRank {
     // Friended to access retry_dispatch
     friend class C_MDS_RetryMessage;
 
-    // FIXME the state machine logic should be separable from the dispatch
-    // logic that calls it.
-    // >>>
     void calc_recovery_set();
     void request_state(MDSMap::DaemonState s);
 
@@ -447,12 +444,9 @@ class MDSRank {
     void active_start();
     void stopping_start();
     void stopping_done();
-    // <<<
     
-    // >>>
     void handle_mds_recovery(mds_rank_t who);
     void handle_mds_failure(mds_rank_t who);
-    // <<<
 };
 
 /* This expects to be given a reference which it is responsible for.
