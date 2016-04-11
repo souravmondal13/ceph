@@ -774,7 +774,7 @@ int XioMessenger::_send_message(Message *m, Connection *con)
 {
   if (con == loop_con.get() /* intrusive_ptr get() */) {
     m->set_connection(con);
-    m->set_src(get_myinst().name);
+    m->set_src(get_myname(con->peer_type));
     m->set_seq(loop_con->next_seq());
     ds_dispatch(m);
     return 0;

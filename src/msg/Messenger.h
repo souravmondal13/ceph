@@ -45,6 +45,7 @@ private:
 protected:
   /// the "name" of the local daemon. eg client.99
   entity_inst_t my_inst;
+  std::map<int, entity_name_t> name_overrides;
   int default_send_priority;
   /// set to true once the Messenger has started, and set to false on shutdown
   bool started;
@@ -212,15 +213,18 @@ public:
    * @return A const reference to the name this Messenger
    * currently believes to be its own.
    */
-  const entity_name_t& get_myname() { return my_inst.name; }
+  const entity_name_t& get_myname(const int p=-1);
   /**
    * Set the name of the local entity. The name is reported to others and
    * can be changed while the system is running, but doing so at incorrect
    * times may have bad results.
    *
    * @param m The name to set.
+   * @param p The peer type with which to use this name, or omit
+   *          this argument to use this name with all peers.
    */
-  void set_myname(const entity_name_t& m) { my_inst.name = m; }
+  void set_myname(const entity_name_t& m, const int p=-1);
+
   /**
    * Set the unknown address components for this Messenger.
    * This is useful if the Messenger doesn't know its full address just by

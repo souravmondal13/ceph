@@ -2005,7 +2005,7 @@ int AsyncConnection::send_message(Message *m)
   if (!m->get_priority())
     m->set_priority(async_msgr->get_default_send_priority());
 
-  m->get_header().src = async_msgr->get_myname();
+  m->get_header().src = async_msgr->get_myname(peer_type);
   m->set_connection(this);
 
   if (async_msgr->get_myaddr() == get_peer_addr()) { //loopback connection

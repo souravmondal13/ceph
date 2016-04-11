@@ -99,7 +99,7 @@ int SimpleMessenger::shutdown()
 int SimpleMessenger::_send_message(Message *m, const entity_inst_t& dest)
 {
   // set envelope
-  m->get_header().src = get_myname();
+  m->get_header().src = get_myname(dest.name.type());
   m->set_cct(cct);
 
   if (!m->get_priority()) m->set_priority(get_default_send_priority());
@@ -128,7 +128,7 @@ int SimpleMessenger::_send_message(Message *m, const entity_inst_t& dest)
 int SimpleMessenger::_send_message(Message *m, Connection *con)
 {
   //set envelope
-  m->get_header().src = get_myname();
+  m->get_header().src = get_myname(con->peer_type);
 
   if (!m->get_priority()) m->set_priority(get_default_send_priority());
 

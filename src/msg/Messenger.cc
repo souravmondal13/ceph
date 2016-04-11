@@ -56,3 +56,18 @@ int Messenger::get_default_crc_flags(md_config_t * conf)
     r |= MSG_CRC_HEADER;
   return r;
 }
+
+void Messenger::set_myname(const entity_name_t& m, const int p)
+{
+  if (p == -1) {
+    my_inst.name = m;
+    name_overrides.clear();
+  } else {
+    name_overrides[p] = m;
+  }
+}
+
+const entity_name_t& Messenger::get_myname(const int p)
+{
+  return (name_overrides.count(p) ? name_overrides[p] : my_inst.name);
+}
