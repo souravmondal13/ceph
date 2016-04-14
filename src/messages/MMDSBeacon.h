@@ -121,7 +121,7 @@ WRITE_CLASS_ENCODER(MDSHealth)
 
 class MMDSBeacon : public PaxosServiceMessage {
 
-  static const int HEAD_VERSION = 6;
+  static const int HEAD_VERSION = 7;
   static const int COMPAT_VERSION = 2;
 
   uuid_d fsid;
@@ -142,6 +142,8 @@ class MMDSBeacon : public PaxosServiceMessage {
   map<string, string> sys_info;
 
   uint64_t mds_features;
+
+  entity_addr_t server_addr;
 
  public:
   MMDSBeacon() : PaxosServiceMessage(MSG_MDS_BEACON, 0, HEAD_VERSION, COMPAT_VERSION) { }
@@ -166,6 +168,7 @@ public:
   const string& get_standby_for_name() { return standby_for_name; }
   const fs_cluster_id_t& get_standby_for_fscid() { return standby_for_fscid; }
   uint64_t get_mds_features() const { return mds_features; }
+  const entity_addr_t &get_server_addr() const { return server_addr; }
 
   CompatSet const& get_compat() const { return compat; }
   void set_compat(const CompatSet& c) { compat = c; }
@@ -177,6 +180,7 @@ public:
   void set_standby_for_name(string& n) { standby_for_name = n; }
   void set_standby_for_name(const char* c) { standby_for_name.assign(c); }
   void set_standby_for_fscid(fs_cluster_id_t f) { standby_for_fscid = f; }
+  void set_server_addr(const entity_addr_t &sa) { server_addr = sa; }
 
   const map<string, string>& get_sys_info() const { return sys_info; }
   void set_sys_info(const map<string, string>& i) { sys_info = i; }
@@ -202,6 +206,7 @@ public:
     }
     ::encode(mds_features, payload);
     ::encode(standby_for_fscid, payload);
+    ::encode(server_addr, payload);
   }
   void decode_payload() {
     bufferlist::iterator p = payload.begin();
@@ -227,6 +232,9 @@ public:
     }
     if (header.version >= 6) {
       ::decode(standby_for_fscid, p);
+    }
+    if (header.version >= 7) {
+      ::decode(server_addr, p);
     }
   }
 };
