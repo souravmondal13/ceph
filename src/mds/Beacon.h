@@ -51,6 +51,9 @@ class Beacon : public Dispatcher
   mds_rank_t standby_for_rank;
   std::string standby_for_name;
   fs_cluster_id_t standby_for_fscid;
+  entity_addr_t server_addr;
+
+
   MDSMap::DaemonState want_state;
 
   // Internal beacon state
@@ -88,7 +91,7 @@ public:
 
   void init(MDSMap const *mdsmap, MDSMap::DaemonState want_state_,
       mds_rank_t standby_rank_, std::string const &standby_name_,
-      fs_cluster_id_t standby_fscid_);
+      fs_cluster_id_t standby_fscid_, const entity_addr_t &server_addr_);
   void shutdown();
 
   bool ms_dispatch(Message *m); 

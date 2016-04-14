@@ -38,9 +38,6 @@
 
 #include "Beacon.h"
 
-
-#define CEPH_MDS_PROTOCOL    27 /* cluster internal */
-
 class filepath;
 
 class MonClient;
@@ -92,6 +89,7 @@ class MDSDaemon : public Dispatcher, public md_config_obs_t {
   std::string name;
 
   Messenger    *messenger;
+  Messenger    *server_messenger;
   MonClient    *monc;
   MDSMap       *mdsmap;
   Objecter     *objecter;
@@ -101,7 +99,8 @@ class MDSDaemon : public Dispatcher, public md_config_obs_t {
   MDSRankDispatcher *mds_rank;
 
  public:
-  MDSDaemon(const std::string &n, Messenger *m, MonClient *mc);
+  MDSDaemon(const std::string &n, Messenger *m, Messenger *server_messenger,
+            MonClient *mc);
   ~MDSDaemon();
   int orig_argc;
   const char **orig_argv;

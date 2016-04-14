@@ -136,7 +136,10 @@ public:
     int32_t inc;
     MDSMap::DaemonState state;
     version_t state_seq;
-    entity_addr_t addr;
+    // The daemon's client messenger (RADOS protocol to mon and OSDs)
+    entity_addr_t client_addr;
+    // The daemon's server messenger (CephFS protocol to MDSs and clients)
+    entity_addr_t server_addr;
     utime_t laggy_since;
     mds_rank_t standby_for_rank;
     std::string standby_for_name;
@@ -152,7 +155,12 @@ public:
     bool laggy() const { return !(laggy_since == utime_t()); }
     void clear_laggy() { laggy_since = utime_t(); }
 
-    entity_inst_t get_inst() const { return entity_inst_t(entity_name_t::MDS(rank), addr); }
+    entity_inst_t get_server_inst() const {
+      return entity_inst_t(entity_name_t::MDS(rank), server_addr);
+    }
+    entity_inst_t get_client_inst() const {
+      return entity_inst_t(entity_name_t::MDS(rank), client_addr);
+    }
 
     void encode(bufferlist& bl, uint64_t features) const {
       if ((features & CEPH_FEATURE_MDSENC) == 0 ) encode_unversioned(bl);
@@ -570,14 +578,24 @@ public:
    * Get the MDS daemon entity_inst_t for a rank
    * known to be up.
    */
-  const entity_inst_t get_inst(mds_rank_t m) {
+  const entity_inst_t get_server_inst(mds_rank_t m) {
     assert(up.count(m));
-    return mds_info[up[m]].get_inst();
+    return mds_info[up[m]].get_server_inst();
   }
+  const entity_inst_t get_client_inst(mds_rank_t m) {
+    assert(up.count(m));
+    return mds_info[up[m]].get_client_inst();
+  }
+  const entity_addr_t get_server_addr(mds_rank_t m) {
+    assert(up.count(m));
+    return mds_info[up[m]].server_addr;
+  }
+  /*
   const entity_addr_t get_addr(mds_rank_t m) {
     assert(up.count(m));
     return mds_info[up[m]].addr;
   }
+  */
 
   /**
    * Get the MDS daemon entity_inst_t for a rank,
@@ -586,6 +604,14 @@ public:
    * @return true if the rank was up and the inst
    *         was populated, else false.
    */
+  bool get_server_inst(mds_rank_t m, entity_inst_t& inst) {
+    if (up.count(m)) {
+      inst = get_server_inst(m);
+      return true;
+    } 
+    return false;
+  }
+  /*
   bool get_inst(mds_rank_t m, entity_inst_t& inst) {
     if (up.count(m)) {
       inst = get_inst(m);
@@ -593,6 +619,7 @@ public:
     } 
     return false;
   }
+  */
   
   mds_rank_t get_rank_gid(mds_gid_t gid) const {
     if (mds_info.count(gid)) {

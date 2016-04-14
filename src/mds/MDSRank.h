@@ -32,6 +32,11 @@
 // benefit of those including this header and using MDSRank::logger
 #include "common/perf_counters.h"
 
+
+#define CEPH_MDS_PROTOCOL    27 /* cluster internal */
+
+class AuthAuthorizeHandlerRegistry;
+
 enum {
   l_mds_first = 2000,
   l_mds_request,
@@ -274,8 +279,8 @@ class MDSRank {
         SafeTimer &timer_,
         Beacon &beacon_,
         MDSMap *& mdsmap_,
-        Messenger *msgr,
         MonClient *monc_,
+        Messenger *messenger_,
         Objecter *objecter_,
         Context *respawn_hook_,
         Context *suicide_hook_);
@@ -360,6 +365,16 @@ class MDSRank {
 
     MDSMap *get_mds_map() { return mdsmap; }
 
+    /**
+     * Assuming that the message's entity num is set to
+     * a GID that is present in our MDSMap, return the peer's rank
+     */
+    inline mds_rank_t get_peer_rank(Message *m) const
+    {
+      return mdsmap->get_rank_gid(
+            mds_gid_t(m->get_source().num()));
+    }
+
     int get_req_rate() { return logger->get(l_mds_request); }
 
     void dump_status(Formatter *f) const;
@@ -391,8 +406,8 @@ class MDSRank {
         std::ostream &ss);
 
   protected:
-    Messenger    *messenger;
     MonClient    *monc;
+    Messenger    *messenger;
 
     Context *respawn_hook;
     Context *suicide_hook;
@@ -472,7 +487,7 @@ public:
  * the service/dispatcher stuff like init/shutdown that subsystems should
  * never touch.
  */
-class MDSRankDispatcher : public MDSRank
+class MDSRankDispatcher : public MDSRank, public Dispatcher
 {
 public:
   void init();
@@ -498,8 +513,19 @@ public:
   std::vector<entity_name_t> evict_sessions(
       const SessionFilter &filter);
 
-  // Call into me from MDS::ms_dispatch
   bool ms_dispatch(Message *m);
+  bool ms_verify_authorizer(Connection *con, int peer_type,
+			       int protocol, bufferlist& authorizer_data, bufferlist& authorizer_reply,
+			       bool& isvalid, CryptoKey& session_key);
+  void ms_handle_accept(Connection *con);
+  void ms_handle_connect(Connection *con);
+  bool ms_handle_reset(Connection *con);
+  void ms_handle_remote_reset(Connection *con);
+  AuthAuthorizeHandlerRegistry *authorize_handler_cluster_registry;
+  AuthAuthorizeHandlerRegistry *authorize_handler_service_registry;
+
+  // Call into me from MDS::ms_dispatch
+  bool ms_dispatch_unlocked(Message *m);
 
   MDSRankDispatcher(
       mds_rank_t whoami_,
@@ -508,11 +534,13 @@ public:
       SafeTimer &timer_,
       Beacon &beacon_,
       MDSMap *& mdsmap_,
-      Messenger *msgr,
       MonClient *monc_,
+      Messenger *messenger_,
       Objecter *objecter_,
       Context *respawn_hook_,
       Context *suicide_hook_);
+
+  ~MDSRankDispatcher();
 };
 
 // This utility for MDS and MDSRank dispatchers.

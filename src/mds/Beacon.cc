@@ -53,7 +53,7 @@ Beacon::~Beacon()
 
 void Beacon::init(MDSMap const *mdsmap, MDSMap::DaemonState want_state_,
     mds_rank_t standby_rank_, std::string const & standby_name_,
-    fs_cluster_id_t standby_fscid_)
+    fs_cluster_id_t standby_fscid_, const entity_addr_t &server_addr_)
 {
   Mutex::Locker l(lock);
   assert(mdsmap != NULL);
@@ -63,6 +63,8 @@ void Beacon::init(MDSMap const *mdsmap, MDSMap::DaemonState want_state_,
   standby_for_rank = standby_rank_;
   standby_for_name = standby_name_;
   standby_for_fscid = standby_fscid_;
+
+  server_addr = server_addr_;
 
   // Spawn threads and start messaging
   timer.init();
@@ -218,6 +220,7 @@ void Beacon::_send()
     collect_sys_info(&sys_info, cct);
     beacon->set_sys_info(sys_info);
   }
+  beacon->set_server_addr(server_addr);
   monc->send_mon_message(beacon);
 }
 

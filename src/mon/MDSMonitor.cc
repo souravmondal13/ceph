@@ -314,8 +314,8 @@ bool MDSMonitor::preprocess_beacon(MonOpRequestRef op)
 	   << " " << m->get_compat()
 	   << dendl;
 
-  // make sure the address has a port
-  if (m->get_orig_source_addr().get_port() == 0) {
+  // make sure the server address is usable
+  if (m->get_server_addr().get_port() == 0) {
     dout(1) << " ignoring boot message without a port" << dendl;
     goto ignore;
   }
@@ -485,7 +485,6 @@ bool MDSMonitor::prepare_beacon(MonOpRequestRef op)
   MMDSBeacon *m = static_cast<MMDSBeacon*>(op->get_req());
   // -- this is an update --
   dout(12) << "prepare_beacon " << *m << " from " << m->get_orig_source_inst() << dendl;
-  entity_addr_t addr = m->get_orig_source_inst().addr;
   mds_gid_t gid = m->get_global_id();
   MDSMap::DaemonState state = m->get_state();
   version_t seq = m->get_seq();
@@ -518,7 +517,14 @@ bool MDSMonitor::prepare_beacon(MonOpRequestRef op)
       MDSMap::mds_info_t new_info;
       new_info.global_id = gid;
       new_info.name = m->get_name();
-      new_info.addr = addr;
+      new_info.client_addr = m->get_orig_source_inst().addr;
+      if (m->get_server_addr() != entity_addr_t()) {
+        new_info.server_addr = new_info.client_addr;
+        new_info.server_addr.set_port(m->get_server_addr().get_port());
+      } else {
+        // Legacy daemons use a single messenger
+        new_info.server_addr = new_info.client_addr;
+      }
       new_info.mds_features = m->get_mds_features();
       new_info.state = MDSMap::STATE_STANDBY;
       new_info.state_seq = seq;
@@ -573,7 +579,8 @@ bool MDSMonitor::prepare_beacon(MonOpRequestRef op)
     }
 
     if (info.laggy()) {
-      dout(10) << "prepare_beacon clearing laggy flag on " << addr << dendl;
+      dout(10) << "prepare_beacon clearing laggy flag on "
+               << info.client_addr << dendl;
       pending_fsmap.modify_daemon(info.global_id, [](MDSMap::mds_info_t *info)
         {
           info->clear_laggy();
@@ -664,7 +671,8 @@ bool MDSMonitor::prepare_beacon(MonOpRequestRef op)
               << info.rank << " damaged" << dendl;
 
       const utime_t until = ceph_clock_now(g_ceph_context);
-      const auto blacklist_epoch = mon->osdmon()->blacklist(info.addr, until);
+      const auto blacklist_epoch = mon->osdmon()->blacklist(
+          info.client_addr, until);
       request_proposal(mon->osdmon());
       pending_fsmap.damaged(gid, blacklist_epoch);
       last_beacon.erase(gid);
@@ -1106,7 +1114,7 @@ bool MDSMonitor::preprocess_command(MonOpRequestRef op)
       const auto info_map = fsmap.get_mds_info();
       for (const auto &i : info_map) {
 	m->cmd = args_vec;
-	mon->send_command(i.second.get_inst(), m->cmd);
+	mon->send_command(i.second.get_client_inst(), m->cmd);
 	r = 0;
       }
       if (r == -ENOENT) {
@@ -1123,7 +1131,7 @@ bool MDSMonitor::preprocess_command(MonOpRequestRef op)
           mds_rank_t who = mds_rank_t(who_l);
           if (fs->mds_map.is_up(who)) {
             m->cmd = args_vec;
-            mon->send_command(fs->mds_map.get_inst(who), m->cmd);
+            mon->send_command(fs->mds_map.get_client_inst(who), m->cmd);
             r = 0;
             ss << "ok";
           } else {
@@ -1250,7 +1258,7 @@ bool MDSMonitor::fail_mds_gid(mds_gid_t gid)
   if (info.rank >= 0 && info.state != MDSMap::STATE_STANDBY_REPLAY) {
     utime_t until = ceph_clock_now(g_ceph_context);
     until += g_conf->mds_blacklist_interval;
-    blacklist_epoch = mon->osdmon()->blacklist(info.addr, until);
+    blacklist_epoch = mon->osdmon()->blacklist(info.client_addr, until);
   }
 
   pending_fsmap.erase(gid, blacklist_epoch);
@@ -2142,7 +2150,7 @@ int MDSMonitor::filesystem_command(
       r = 0;
       mds_gid_t gid = fs->mds_map.up.at(role.rank);
       ss << "telling mds." << role << " "
-         << pending_fsmap.get_info_gid(gid).addr << " to deactivate";
+         << pending_fsmap.get_info_gid(gid).server_addr << " to deactivate";
 
       pending_fsmap.modify_daemon(gid, [](MDSMap::mds_info_t *info) {
         info->state = MDSMap::STATE_STOPPING;
@@ -2422,7 +2430,7 @@ void MDSMonitor::check_sub(Subscription *sub)
       // What (if any) namespace are you assigned to?
       auto mds_info = fsmap.get_mds_info();
       for (const auto &i : mds_info) {
-        if (i.second.addr == sub->session->inst.addr) {
+        if (i.second.client_addr == sub->session->inst.addr) {
           mds_gid = i.first;
           fscid = fsmap.mds_roles.at(mds_gid);
         }
@@ -2633,7 +2641,7 @@ bool MDSMonitor::maybe_expand_cluster(std::shared_ptr<Filesystem> fs)
       break;
     }
 
-    dout(1) << "adding standby " << pending_fsmap.get_info_gid(newgid).addr
+    dout(1) << "adding standby " << pending_fsmap.get_info_gid(newgid).client_addr
             << " as mds." << mds << dendl;
     pending_fsmap.promote(newgid, fs, mds);
     do_propose = true;
@@ -2658,7 +2666,7 @@ void MDSMonitor::maybe_replace_gid(mds_gid_t gid,
   const MDSMap::mds_info_t info = pending_fsmap.get_info_gid(gid);
   const auto fscid = pending_fsmap.mds_roles.at(gid);
 
-  dout(10) << "no beacon from " << gid << " " << info.addr << " mds."
+  dout(10) << "no beacon from " << gid << " " << info.client_addr << " mds."
     << info.rank << "." << info.inc
     << " " << ceph_mds_state_name(info.state)
     << " since " << beacon.stamp << dendl;
@@ -2674,10 +2682,10 @@ void MDSMonitor::maybe_replace_gid(mds_gid_t gid,
                 g_conf->mon_force_standby_active)) != MDS_GID_NONE) {
     
     MDSMap::mds_info_t si = pending_fsmap.get_info_gid(sgid);
-    dout(10) << " replacing " << gid << " " << info.addr << " mds."
+    dout(10) << " replacing " << gid << " " << info.client_addr << " mds."
       << info.rank << "." << info.inc
       << " " << ceph_mds_state_name(info.state)
-      << " with " << sgid << "/" << si.name << " " << si.addr << dendl;
+      << " with " << sgid << "/" << si.name << " " << si.client_addr << dendl;
 
     // Remember what NS the old one was in
     const fs_cluster_id_t fscid = pending_fsmap.mds_roles.at(gid);
@@ -2691,7 +2699,7 @@ void MDSMonitor::maybe_replace_gid(mds_gid_t gid,
 
     *mds_propose = true;
   } else if (info.state == MDSMap::STATE_STANDBY_REPLAY) {
-    dout(10) << " failing " << gid << " " << info.addr << " mds." << info.rank << "." << info.inc
+    dout(10) << " failing " << gid << " " << info.client_addr << " mds." << info.rank << "." << info.inc
       << " " << ceph_mds_state_name(info.state)
       << dendl;
     fail_mds_gid(gid);
@@ -2700,13 +2708,13 @@ void MDSMonitor::maybe_replace_gid(mds_gid_t gid,
     if (info.state == MDSMap::STATE_STANDBY ||
         info.state == MDSMap::STATE_STANDBY_REPLAY) {
       // remove it
-      dout(10) << " removing " << gid << " " << info.addr << " mds." << info.rank << "." << info.inc
+      dout(10) << " removing " << gid << " " << info.client_addr << " mds." << info.rank << "." << info.inc
         << " " << ceph_mds_state_name(info.state)
         << " (laggy)" << dendl;
       fail_mds_gid(gid);
       *mds_propose = true;
     } else if (!info.laggy()) {
-      dout(10) << " marking " << gid << " " << info.addr << " mds." << info.rank << "." << info.inc
+      dout(10) << " marking " << gid << " " << info.client_addr << " mds." << info.rank << "." << info.inc
         << " " << ceph_mds_state_name(info.state)
         << " laggy" << dendl;
       pending_fsmap.modify_daemon(info.global_id, [](MDSMap::mds_info_t *info) {
@@ -2736,7 +2744,7 @@ bool MDSMonitor::maybe_promote_standby(std::shared_ptr<Filesystem> fs)
       if (sgid) {
         const MDSMap::mds_info_t si = pending_fsmap.get_info_gid(sgid);
         dout(0) << " taking over failed mds." << f << " with " << sgid
-                << "/" << si.name << " " << si.addr << dendl;
+                << "/" << si.name << " " << si.client_addr << dendl;
         pending_fsmap.promote(sgid, fs, f);
 	do_propose = true;
       }

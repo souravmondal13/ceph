@@ -23,6 +23,7 @@ using namespace std;
 #include "include/ceph_features.h"
 
 #include "common/config.h"
+#include "common/errno.h"
 #include "common/strtol.h"
 
 #include "mon/MonMap.h"
@@ -157,12 +158,14 @@ int main(int argc, const char **argv)
       "MDS names may not start with a numeric digit." << dendl;
   }
 
+  // This messenger will later take the MDS GID as its entity name.
+  // It is just a client (to the mon and the objecter).  MDSRank
+  // will later create a separate one for talking to MDS peers and clients.
   Messenger *msgr = Messenger::create(g_ceph_context, g_conf->ms_type,
 				      entity_name_t::MDS(-1), "mds",
 				      getpid());
   if (!msgr)
     exit(1);
-  msgr->set_cluster_protocol(CEPH_MDS_PROTOCOL);
 
   cout << "starting " << g_conf->name << " at " << msgr->get_myaddr()
        << std::endl;
@@ -183,15 +186,25 @@ int main(int argc, const char **argv)
                    Messenger::Policy::lossy_client(supported,
                                                    CEPH_FEATURE_UID |
                                                    CEPH_FEATURE_PGID64));
-  msgr->set_policy(entity_name_t::TYPE_MDS,
+
+  // This is the rank-identified messenger, which is used for
+  // communication with the MDS cluster (MDS daemons and clients)
+  Messenger *server_msgr = Messenger::create(g_ceph_context, g_conf->ms_type,
+                                entity_name_t::MDS(-1), "mds",
+                                getpid());
+  server_msgr->set_cluster_protocol(CEPH_MDS_PROTOCOL);
+  server_msgr->set_policy(entity_name_t::TYPE_MDS,
                    Messenger::Policy::lossless_peer(supported,
                                                     CEPH_FEATURE_UID));
-  msgr->set_policy(entity_name_t::TYPE_CLIENT,
+  server_msgr->set_policy(entity_name_t::TYPE_CLIENT,
                    Messenger::Policy::stateful_server(supported, 0));
 
-  int r = msgr->bind(g_conf->public_addr);
-  if (r < 0)
+  int r = server_msgr->bind(g_conf->public_addr);
+  if (r < 0) {
+    derr << "Failed to bind to " << g_conf->public_addr << ": "
+         << cpp_strerror(r) << dendl;
     exit(1);
+  }
 
   if (shadow != MDSMap::STATE_ONESHOT_REPLAY)
     global_init_daemonize(g_ceph_context);
@@ -206,7 +219,7 @@ int main(int argc, const char **argv)
   msgr->start();
 
   // start mds
-  mds = new MDSDaemon(g_conf->name.get_id().c_str(), msgr, &mc);
+  mds = new MDSDaemon(g_conf->name.get_id().c_str(), msgr, server_msgr, &mc);
 
   // in case we have to respawn...
   mds->orig_argc = argc;
@@ -231,6 +244,7 @@ int main(int argc, const char **argv)
     kill(getpid(), SIGTERM);
 
   msgr->wait();
+  server_msgr->wait();
 
   unregister_async_signal_handler(SIGHUP, sighup_handler);
   unregister_async_signal_handler(SIGINT, handle_mds_signal);

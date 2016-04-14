@@ -76,7 +76,8 @@ void MDSMap::mds_info_t::dump(Formatter *f) const
   f->dump_int("incarnation", inc);
   f->dump_stream("state") << ceph_mds_state_name(state);
   f->dump_int("state_seq", state_seq);
-  f->dump_stream("addr") << addr;
+  f->dump_stream("server_addr") << server_addr;
+  f->dump_stream("client_addr") << client_addr;
   if (laggy_since != utime_t())
     f->dump_stream("laggy_since") << laggy_since;
   
@@ -95,7 +96,8 @@ void MDSMap::mds_info_t::dump(Formatter *f) const
 void MDSMap::mds_info_t::print_summary(ostream &out) const
 {
   out << global_id << ":\t"
-      << addr
+      << client_addr
+      << " / " << server_addr
       << " '" << name << "'"
       << " mds." << rank
       << "." << inc
@@ -361,13 +363,19 @@ void MDSMap::get_health(list<pair<health_status_t,string> >& summary,
 	map<mds_gid_t,mds_info_t>::const_iterator info = mds_info.find(gid);
 	stringstream ss;
 	if (is_resolve(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is resolving";
+	  ss << "mds." << info->second.name << " at "
+            << info->second.client_addr << " rank " << i << " is resolving";
 	if (is_replay(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is replaying journal";
+	  ss << "mds." << info->second.name << " at "
+            << info->second.client_addr << " rank " << i
+            << " is replaying journal";
 	if (is_rejoin(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is rejoining";
+	  ss << "mds." << info->second.name << " at "
+            << info->second.client_addr << " rank " << i << " is rejoining";
 	if (is_reconnect(i))
-	  ss << "mds." << info->second.name << " at " << info->second.addr << " rank " << i << " is reconnecting to clients";
+	  ss << "mds." << info->second.name << " at "
+            << info->second.client_addr << " rank " << i
+            << " is reconnecting to clients";
 	if (ss.str().length())
 	  detail->push_back(make_pair(HEALTH_WARN, ss.str()));
       }
@@ -389,7 +397,8 @@ void MDSMap::get_health(list<pair<health_status_t,string> >& summary,
       laggy.insert(mds_info.name);
       if (detail) {
 	std::ostringstream oss;
-	oss << "mds." << mds_info.name << " at " << mds_info.addr << " is laggy/unresponsive";
+	oss << "mds." << mds_info.name << " at " << mds_info.client_addr
+            << " is laggy/unresponsive";
 	detail->push_back(make_pair(HEALTH_WARN, oss.str()));
       }
     }
@@ -406,20 +415,21 @@ void MDSMap::get_health(list<pair<health_status_t,string> >& summary,
 
 void MDSMap::mds_info_t::encode_versioned(bufferlist& bl, uint64_t features) const
 {
-  ENCODE_START(6, 4, bl);
+  ENCODE_START(7, 4, bl);
   ::encode(global_id, bl);
   ::encode(name, bl);
   ::encode(rank, bl);
   ::encode(inc, bl);
   ::encode((int32_t)state, bl);
   ::encode(state_seq, bl);
-  ::encode(addr, bl);
+  ::encode(server_addr, bl);
   ::encode(laggy_since, bl);
   ::encode(standby_for_rank, bl);
   ::encode(standby_for_name, bl);
   ::encode(export_targets, bl);
   ::encode(mds_features, bl);
   ::encode(standby_for_fscid, bl);
+  ::encode(client_addr, bl);
   ENCODE_FINISH(bl);
 }
 
@@ -433,7 +443,7 @@ void MDSMap::mds_info_t::encode_unversioned(bufferlist& bl) const
   ::encode(inc, bl);
   ::encode((int32_t)state, bl);
   ::encode(state_seq, bl);
-  ::encode(addr, bl);
+  ::encode(server_addr, bl);
   ::encode(laggy_since, bl);
   ::encode(standby_for_rank, bl);
   ::encode(standby_for_name, bl);
@@ -442,14 +452,17 @@ void MDSMap::mds_info_t::encode_unversioned(bufferlist& bl) const
 
 void MDSMap::mds_info_t::decode(bufferlist::iterator& bl)
 {
-  DECODE_START_LEGACY_COMPAT_LEN(6, 4, 4, bl);
+  DECODE_START_LEGACY_COMPAT_LEN(7, 4, 4, bl);
   ::decode(global_id, bl);
   ::decode(name, bl);
   ::decode(rank, bl);
   ::decode(inc, bl);
   ::decode((int32_t&)(state), bl);
   ::decode(state_seq, bl);
-  ::decode(addr, bl);
+  // Legacy consumers (like old clients) that are unaware of the distinction
+  // between server_addr and client_addr need to see the server addr here (
+  // it was the old 'addr' field).
+  ::decode(server_addr, bl);
   ::decode(laggy_since, bl);
   ::decode(standby_for_rank, bl);
   ::decode(standby_for_name, bl);
@@ -459,6 +472,12 @@ void MDSMap::mds_info_t::decode(bufferlist::iterator& bl)
     ::decode(mds_features, bl);
   if (struct_v >= 6) {
     ::decode(standby_for_fscid, bl);
+  }
+  if (struct_v >= 7) {
+    ::decode(client_addr, bl);
+  } else {
+    // Legacy systems use same addr for both
+    client_addr = server_addr;
   }
   DECODE_FINISH(bl);
 }

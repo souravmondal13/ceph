@@ -18,6 +18,9 @@
 #include "messages/MClientRequestForward.h"
 #include "messages/MMDSMap.h"
 
+#include "auth/AuthAuthorizeHandler.h"
+#include "auth/KeyRing.h"
+
 #include "MDSMap.h"
 #include "SnapClient.h"
 #include "SnapServer.h"
@@ -44,8 +47,8 @@ MDSRank::MDSRank(
     SafeTimer &timer_,
     Beacon &beacon_,
     MDSMap *& mdsmap_,
-    Messenger *msgr,
     MonClient *monc_,
+    Messenger *messenger_,
     Objecter *objecter_,
     Context *respawn_hook_,
     Context *suicide_hook_)
@@ -67,14 +70,14 @@ MDSRank::MDSRank(
     progress_thread(this), dispatch_depth(0),
     hb(NULL), last_tid(0), osd_epoch_barrier(0), beacon(beacon_),
     last_client_mdsmap_bcast(0),
-    messenger(msgr), monc(monc_),
+    monc(monc_), messenger(messenger_),
     respawn_hook(respawn_hook_),
     suicide_hook(suicide_hook_),
     standby_replaying(false)
 {
   hb = g_ceph_context->get_heartbeat_map()->add_worker("MDSRank");
 
-  finisher = new Finisher(msgr->cct);
+  finisher = new Finisher(g_ceph_context);
 
   mdcache = new MDCache(this);
   mdlog = new MDLog(this);
@@ -89,10 +92,12 @@ MDSRank::MDSRank(
   server = new Server(this);
   locker = new Locker(this, mdcache);
 
-  op_tracker.set_complaint_and_threshold(msgr->cct->_conf->mds_op_complaint_time,
-                                         msgr->cct->_conf->mds_op_log_threshold);
-  op_tracker.set_history_size_and_duration(msgr->cct->_conf->mds_op_history_size,
-                                           msgr->cct->_conf->mds_op_history_duration);
+  op_tracker.set_complaint_and_threshold(
+      g_ceph_context->_conf->mds_op_complaint_time,
+      g_ceph_context->_conf->mds_op_log_threshold);
+  op_tracker.set_history_size_and_duration(
+      g_ceph_context->_conf->mds_op_history_size,
+      g_ceph_context->_conf->mds_op_history_duration);
 }
 
 MDSRank::~MDSRank()
@@ -136,6 +141,8 @@ MDSRank::~MDSRank()
 
 void MDSRankDispatcher::init()
 {
+  assert(mds_lock.is_locked_by_me());
+
   update_log_config();
   create_logger();
 
@@ -146,6 +153,10 @@ void MDSRankDispatcher::init()
   progress_thread.create("mds_rank_progr");
 
   finisher->start();
+
+  messenger->set_myname(entity_name_t::MDS(whoami));
+  messenger->add_dispatcher_tail(this);
+  messenger->start();
 }
 
 void MDSRankDispatcher::tick()
@@ -390,15 +401,6 @@ void MDSRank::ProgressThread::shutdown()
   }
 }
 
-bool MDSRankDispatcher::ms_dispatch(Message *m)
-{
-  bool ret;
-  inc_dispatch_depth();
-  ret = _dispatch(m, true);
-  dec_dispatch_depth();
-  return ret;
-}
-
 /* If this function returns true, it has put the message. If it returns false,
  * it has not put the message. */
 bool MDSRank::_dispatch(Message *m, bool new_msg)
@@ -559,6 +561,20 @@ bool MDSRank::handle_deferrable_message(Message *m)
 {
   int port = m->get_type() & 0xff00;
 
+  if (m->get_source().type() == entity_name_t::TYPE_MDS) {
+    // Because peers send MDSMap ahead of their messages if they aren't
+    // sure we already have it, we should always have them in our map,
+    // unless we already got a map indicating they're down, but they
+    // didn't get it yet.
+    if (get_peer_rank(m) == MDS_RANK_NONE) {
+      dout(1) << "Dropping message from peer "
+              << m->get_source() << " unknown in epoch "
+              << mdsmap->get_epoch() << dendl;
+      m->put();
+      return true;
+    }
+  }
+
   switch (port) {
   case MDS_PORT_CACHE:
     ALLOW_MESSAGES_FROM(CEPH_ENTITY_TYPE_MDS);
@@ -692,16 +708,16 @@ bool MDSRank::is_stale_message(Message *m)
 {
   // from bad mds?
   if (m->get_source().is_mds()) {
-    mds_rank_t from = mds_rank_t(m->get_source().num());
+    const mds_rank_t from = get_peer_rank(m);
     if (!mdsmap->have_inst(from) ||
-	mdsmap->get_inst(from) != m->get_source_inst() ||
+	mdsmap->get_server_inst(from) != m->get_source_inst() ||
 	mdsmap->is_down(from)) {
       // bogus mds?
       if (m->get_type() == CEPH_MSG_MDS_MAP) {
 	dout(5) << "got " << *m << " from old/bad/imposter mds " << m->get_source()
 		<< ", but it's an mdsmap, looking at it" << dendl;
       } else if (m->get_type() == MSG_MDS_CACHEEXPIRE &&
-		 mdsmap->get_inst(from) == m->get_source_inst()) {
+		 mdsmap->get_server_inst(from) == m->get_source_inst()) {
 	dout(5) << "got " << *m << " from down mds " << m->get_source()
 		<< ", but it's a cache_expire, looking at it" << dendl;
       } else {
@@ -733,12 +749,19 @@ void MDSRank::send_message_mds(Message *m, mds_rank_t mds)
   // send mdsmap first?
   if (mds != whoami && peer_mdsmap_epoch[mds] < mdsmap->get_epoch()) {
     messenger->send_message(new MMDSMap(monc->get_fsid(), mdsmap),
-			    mdsmap->get_inst(mds));
+			    mdsmap->get_server_inst(mds));
     peer_mdsmap_epoch[mds] = mdsmap->get_epoch();
   }
 
   // send message
-  messenger->send_message(m, mdsmap->get_inst(mds));
+  if (mds != whoami) {
+    messenger->send_message(m, mdsmap->get_server_inst(mds));
+  } else {
+    // For messages to self, ignore the address in the map, to cope
+    // with situation where I think my addr is 0.0.0.0 but the map
+    // shows my public addr.
+    messenger->send_message(m, messenger->get_myinst());
+  }
 }
 
 void MDSRank::forward_message_mds(Message *m, mds_rank_t mds)
@@ -780,11 +803,11 @@ void MDSRank::forward_message_mds(Message *m, mds_rank_t mds)
   // send mdsmap first?
   if (peer_mdsmap_epoch[mds] < mdsmap->get_epoch()) {
     messenger->send_message(new MMDSMap(monc->get_fsid(), mdsmap),
-			    mdsmap->get_inst(mds));
+			    mdsmap->get_server_inst(mds));
     peer_mdsmap_epoch[mds] = mdsmap->get_epoch();
   }
 
-  messenger->send_message(m, mdsmap->get_inst(mds));
+  messenger->send_message(m, mdsmap->get_server_inst(mds));
 }
 
 
@@ -1390,11 +1413,11 @@ void MDSRankDispatcher::handle_mds_map(
 
   // note source's map version
   if (m->get_source().is_mds() &&
-      peer_mdsmap_epoch[mds_rank_t(m->get_source().num())] < epoch) {
+      peer_mdsmap_epoch[get_peer_rank(m)] < epoch) {
     dout(15) << " peer " << m->get_source()
 	     << " has mdsmap epoch >= " << epoch
 	     << dendl;
-    peer_mdsmap_epoch[mds_rank_t(m->get_source().num())] = epoch;
+    peer_mdsmap_epoch[get_peer_rank(m)] = epoch;
   }
 
   // Validate state transitions while I hold a rank
@@ -1428,12 +1451,7 @@ void MDSRankDispatcher::handle_mds_map(
   if (oldstate != state) {
     // update messenger.
     if (state == MDSMap::STATE_STANDBY_REPLAY || state == MDSMap::STATE_ONESHOT_REPLAY) {
-      dout(1) << "handle_mds_map i am now mds." << mds_gid << "." << incarnation
-	      << " replaying mds." << whoami << "." << incarnation << dendl;
-      messenger->set_myname(entity_name_t::MDS(mds_gid));
-    } else {
-      dout(1) << "handle_mds_map i am now mds." << whoami << "." << incarnation << dendl;
-      messenger->set_myname(entity_name_t::MDS(whoami));
+      dout(1) << "handle_mds_map i am now replaying mds." << whoami << dendl;
     }
   }
 
@@ -1550,7 +1568,7 @@ void MDSRankDispatcher::handle_mds_map(
     mdsmap->get_down_mds_set(&down);
     for (set<mds_rank_t>::iterator p = down.begin(); p != down.end(); ++p) {
       if (olddown.count(*p) == 0) {
-        messenger->mark_down(oldmap->get_inst(*p).addr);
+        messenger->mark_down(oldmap->get_server_inst(*p).addr);
         handle_mds_failure(*p);
       }
     }
@@ -1563,8 +1581,8 @@ void MDSRankDispatcher::handle_mds_map(
     mdsmap->get_up_mds_set(up);
     for (set<mds_rank_t>::iterator p = up.begin(); p != up.end(); ++p) {
       if (oldmap->have_inst(*p) &&
-         oldmap->get_inst(*p) != mdsmap->get_inst(*p)) {
-        messenger->mark_down(oldmap->get_inst(*p).addr);
+         oldmap->get_server_inst(*p) != mdsmap->get_server_inst(*p)) {
+        messenger->mark_down(oldmap->get_server_inst(*p).addr);
         handle_mds_failure(*p);
       }
     }
@@ -2515,14 +2533,30 @@ MDSRankDispatcher::MDSRankDispatcher(
     SafeTimer &timer_,
     Beacon &beacon_,
     MDSMap *& mdsmap_,
-    Messenger *msgr,
     MonClient *monc_,
+    Messenger *m,
     Objecter *objecter_,
     Context *respawn_hook_,
     Context *suicide_hook_)
-  : MDSRank(whoami_, mds_lock_, clog_, timer_, beacon_, mdsmap_,
-      msgr, monc_, objecter_, respawn_hook_, suicide_hook_)
+  :
+    MDSRank(whoami_, mds_lock_, clog_, timer_, beacon_, mdsmap_,
+      monc_, m, objecter_, respawn_hook_, suicide_hook_),
+    Dispatcher(m->cct),
+    authorize_handler_cluster_registry(new AuthAuthorizeHandlerRegistry(m->cct,
+                                                                        m->cct->_conf->auth_supported.empty() ?
+                                                                        m->cct->_conf->auth_cluster_required :
+                                                                        m->cct->_conf->auth_supported)),
+    authorize_handler_service_registry(new AuthAuthorizeHandlerRegistry(m->cct,
+                                                                        m->cct->_conf->auth_supported.empty() ?
+                                                                        m->cct->_conf->auth_service_required :
+                                                                        m->cct->_conf->auth_supported))
 {}
+
+MDSRankDispatcher::~MDSRankDispatcher()
+{
+  delete authorize_handler_service_registry;
+  delete authorize_handler_cluster_registry;
+}
 
 bool MDSRankDispatcher::handle_command(
   const cmdmap_t &cmdmap,
@@ -2585,4 +2619,210 @@ bool MDSRankDispatcher::handle_command(
   } else {
     return false;
   }
+}
+
+bool MDSRankDispatcher::ms_dispatch(Message *m)
+{
+  Mutex::Locker l(mds_lock);
+  if (stopping) {
+    return false;
+  }
+  return ms_dispatch_unlocked(m);
+}
+
+
+
+bool MDSRankDispatcher::ms_dispatch_unlocked(Message *m)
+{
+  bool ret;
+  inc_dispatch_depth();
+  ret = _dispatch(m, true);
+  dec_dispatch_depth();
+  return ret;
+}
+
+void MDSRankDispatcher::ms_handle_accept(Connection *con)
+{
+  Mutex::Locker l(mds_lock);
+  if (stopping) {
+    return;
+  }
+
+  Session *s = static_cast<Session *>(con->get_priv());
+  dout(10) << "ms_handle_accept " << con->get_peer_addr() << " con " << con << " session " << s << dendl;
+  if (s) {
+    if (s->connection != con) {
+      dout(10) << " session connection " << s->connection << " -> " << con << dendl;
+      s->connection = con;
+
+      // send out any queued messages
+      while (!s->preopen_out_queue.empty()) {
+	con->send_message(s->preopen_out_queue.front());
+	s->preopen_out_queue.pop_front();
+      }
+    }
+    s->put();
+  }
+}
+
+void MDSRankDispatcher::ms_handle_connect(Connection *con)
+{
+}
+
+bool MDSRankDispatcher::ms_handle_reset(Connection *con)
+{
+  if (con->get_peer_type() != CEPH_ENTITY_TYPE_CLIENT)
+    return false;
+
+  Mutex::Locker l(mds_lock);
+  if (stopping) {
+    return false;
+  }
+  dout(5) << "ms_handle_reset on " << con->get_peer_addr() << dendl;
+  if (beacon.get_want_state() == CEPH_MDS_STATE_DNE)
+    return false;
+
+  Session *session = static_cast<Session *>(con->get_priv());
+  if (session) {
+    if (session->is_closed()) {
+      dout(3) << "ms_handle_reset closing connection for session " << session->info.inst << dendl;
+      con->mark_down();
+      con->set_priv(NULL);
+    }
+    session->put();
+  } else {
+    con->mark_down();
+  }
+  return false;
+}
+
+
+void MDSRankDispatcher::ms_handle_remote_reset(Connection *con)
+{
+  if (con->get_peer_type() != CEPH_ENTITY_TYPE_CLIENT)
+    return;
+
+  Mutex::Locker l(mds_lock);
+  if (stopping) {
+    return;
+  }
+
+  dout(5) << "ms_handle_remote_reset on " << con->get_peer_addr() << dendl;
+  if (beacon.get_want_state() == CEPH_MDS_STATE_DNE)
+    return;
+
+  Session *session = static_cast<Session *>(con->get_priv());
+  if (session) {
+    if (session->is_closed()) {
+      dout(3) << "ms_handle_remote_reset closing connection for session " << session->info.inst << dendl;
+      con->mark_down();
+      con->set_priv(NULL);
+    }
+    session->put();
+  }
+}
+
+bool MDSRankDispatcher::ms_verify_authorizer(Connection *con, int peer_type,
+			       int protocol, bufferlist& authorizer_data, bufferlist& authorizer_reply,
+			       bool& is_valid, CryptoKey& session_key)
+{
+  Mutex::Locker l(mds_lock);
+  if (stopping) {
+    return false;
+  }
+  if (beacon.get_want_state() == CEPH_MDS_STATE_DNE)
+    return false;
+
+  AuthAuthorizeHandler *authorize_handler = 0;
+  switch (peer_type) {
+  case CEPH_ENTITY_TYPE_MDS:
+    authorize_handler = authorize_handler_cluster_registry->get_handler(protocol);
+    break;
+  default:
+    authorize_handler = authorize_handler_service_registry->get_handler(protocol);
+  }
+  if (!authorize_handler) {
+    dout(0) << "No AuthAuthorizeHandler found for protocol " << protocol << dendl;
+    is_valid = false;
+    return true;
+  }
+
+  AuthCapsInfo caps_info;
+  EntityName name;
+  uint64_t global_id;
+
+  is_valid = authorize_handler->verify_authorizer(cct, monc->rotating_secrets,
+						  authorizer_data, authorizer_reply, name, global_id, caps_info, session_key);
+
+  if (is_valid) {
+    entity_name_t n(con->get_peer_type(), global_id);
+
+    // We allow connections and assign Session instances to connections
+    // even if we have not been assigned a rank, because clients with
+    // "allow *" are allowed to connect and do 'tell' operations before
+    // we have a rank.
+    Session *s = NULL;
+
+    // If we do hold a rank, see if this is an existing client establishing
+    // a new connection, rather than a new client
+    s = sessionmap.get_session(n);
+
+    // Wire up a Session* to this connection
+    // It doesn't go into a SessionMap instance until it sends an explicit
+    // request to open a session (initial state of Session is `closed`)
+    if (!s) {
+      s = new Session;
+      s->info.auth_name = name;
+      s->info.inst.addr = con->get_peer_addr();
+      s->info.inst.name = n;
+      dout(10) << " new session " << s << " for " << s->info.inst << " con " << con << dendl;
+      con->set_priv(s);
+      s->connection = con;
+    } else {
+      dout(10) << " existing session " << s << " for " << s->info.inst << " existing con " << s->connection
+	       << ", new/authorizing con " << con << dendl;
+      con->set_priv(s->get());
+
+
+
+      // Wait until we fully accept the connection before setting
+      // s->connection.  In particular, if there are multiple incoming
+      // connection attempts, they will all get their authorizer
+      // validated, but some of them may "lose the race" and get
+      // dropped.  We only want to consider the winner(s).  See
+      // ms_handle_accept().  This is important for Sessions we replay
+      // from the journal on recovery that don't have established
+      // messenger state; we want the con from only the winning
+      // connect attempt(s).  (Normal reconnects that don't follow MDS
+      // recovery are reconnected to the existing con by the
+      // messenger.)
+    }
+
+    if (caps_info.allow_all) {
+      // Flag for auth providers that don't provide cap strings
+      s->auth_caps.set_allow_all();
+    }
+
+    bufferlist::iterator p = caps_info.caps.begin();
+    string auth_cap_str;
+    try {
+      ::decode(auth_cap_str, p);
+
+      dout(10) << __func__ << ": parsing auth_cap_str='" << auth_cap_str << "'" << dendl;
+      std::ostringstream errstr;
+      if (!s->auth_caps.parse(g_ceph_context, auth_cap_str, &errstr)) {
+        dout(1) << __func__ << ": auth cap parse error: " << errstr.str()
+		<< " parsing '" << auth_cap_str << "'" << dendl;
+	clog->warn() << name << " mds cap '" << auth_cap_str
+		     << "' does not parse: " << errstr.str() << "\n";
+      }
+    } catch (buffer::error& e) {
+      // Assume legacy auth, defaults to:
+      //  * permit all filesystem ops
+      //  * permit no `tell` ops
+      dout(1) << __func__ << ": cannot decode auth caps bl of length " << caps_info.caps.length() << dendl;
+    }
+  }
+
+  return true;  // we made a decision (see is_valid)
 }

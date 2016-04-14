@@ -225,7 +225,7 @@ void MDBalancer::send_heartbeat()
     MHeartbeat *hb = new MHeartbeat(load, beat_epoch);
     hb->get_import_map() = import_map;
     messenger->send_message(hb,
-                            mds->mdsmap->get_inst(*p));
+                            mds->mdsmap->get_server_inst(*p));
   }
 }
 

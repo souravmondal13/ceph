@@ -99,7 +99,8 @@ class C_VoidFn : public Context
 };
 
 // cons/des
-MDSDaemon::MDSDaemon(const std::string &n, Messenger *m, MonClient *mc) :
+MDSDaemon::MDSDaemon(const std::string &n, Messenger *m, Messenger *sm,
+                     MonClient *mc) :
   Dispatcher(m->cct),
   mds_lock("MDSDaemon::mds_lock"),
   stopping(false),
@@ -115,6 +116,7 @@ MDSDaemon::MDSDaemon(const std::string &n, Messenger *m, MonClient *mc) :
 								      m->cct->_conf->auth_supported)),
   name(n),
   messenger(m),
+  server_messenger(sm),
   monc(mc),
   objecter(new Objecter(m->cct, m, mc, NULL, 0, 0)),
   log_client(m->cct, messenger, &mc->monmap, LogClient::NO_FLAGS),
@@ -457,6 +459,12 @@ int MDSDaemon::init(MDSMap::DaemonState wanted_state)
   messenger->add_dispatcher_tail(&beacon);
   messenger->add_dispatcher_tail(this);
 
+  // For the annoying edge case of handling 'tell' messages, which are
+  // sent via the "server" address because this is server-like behaviour
+  // and because they come from clients.  However, they need to work
+  // even when we don't hold a Rank.
+  server_messenger->add_dispatcher_tail(this);
+
   // get monmap
   monc->set_messenger(messenger);
 
@@ -559,10 +567,12 @@ int MDSDaemon::init(MDSMap::DaemonState wanted_state)
   if (wanted_state == MDSMap::STATE_NULL) {
     wanted_state = MDSMap::STATE_BOOT;
   }
+  dout(10) << "Initializing beacon with addr " << server_messenger->get_myaddr() << dendl;
   beacon.init(mdsmap, wanted_state,
     standby_for_rank, standby_for_name,
-    fs_cluster_id_t(g_conf->mds_standby_for_fscid));
-  messenger->set_myname(entity_name_t::MDS(MDS_RANK_NONE));
+    fs_cluster_id_t(g_conf->mds_standby_for_fscid),
+    server_messenger->get_myaddr());
+  messenger->set_myname(entity_name_t::MDS(monc->get_global_id()));
 
   // schedule tick
   reset_tick();
@@ -947,7 +957,7 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
        ++p) {
     if (mdsmap->get_mds_info().count(p->first) == 0) {
       dout(10) << " peer mds gid " << p->first << " removed from map" << dendl;
-      messenger->mark_down(p->second.addr);
+      server_messenger->mark_down(p->second.server_addr);
     }
   }
 
@@ -968,7 +978,7 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
   }
 
   // see who i am
-  addr = messenger->get_myaddr();
+  addr = server_messenger->get_myaddr();
   dout(10) << "map says i am " << addr << " mds." << whoami
 	   << " state " << ceph_mds_state_name(new_state) << dendl;
 
@@ -1013,10 +1023,15 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
     // Did I previously not hold a rank?  Initialize!
     if (mds_rank == NULL) {
       mds_rank = new MDSRankDispatcher(whoami, mds_lock, clog,
-          timer, beacon, mdsmap, messenger, monc, objecter,
+          timer, beacon, mdsmap, monc, server_messenger, objecter,
           new C_VoidFn(this, &MDSDaemon::respawn),
           new C_VoidFn(this, &MDSDaemon::suicide));
-      objecter->set_client_incarnation(mdsmap->get_epoch());
+
+      // Replace our 0.0.0.0 in the server messenger with the
+      // real address, which the mon has read out of our messages
+      // and put into the mdsmap for us.
+      //server_messenger->set_myaddr(mdsmap->get_server_addr(whoami));
+
       dout(10) <<  __func__ << ": initializing MDS rank "
                << mds_rank->get_nodeid() << dendl;
       mds_rank->init();
@@ -1079,7 +1094,7 @@ void MDSDaemon::handle_signal(int signum)
 
 void MDSDaemon::suicide()
 {
-  assert(mds_lock.is_locked());
+  assert(mds_lock.is_locked_by_me());
 
   dout(1) << "suicide.  wanted state "
           << ceph_mds_state_name(beacon.get_want_state()) << dendl;
@@ -1108,6 +1123,8 @@ void MDSDaemon::suicide()
 
   if (mds_rank) {
     mds_rank->shutdown();
+    
+    messenger->shutdown();
   } else {
 
     if (objecter->initialized.read()) {
@@ -1185,12 +1202,16 @@ bool MDSDaemon::ms_dispatch(Message *m)
     return true;
   }
 
+#if 0
   // Not core, try it as a rank message
   if (mds_rank) {
-    return mds_rank->ms_dispatch(m);
+    return mds_rank->ms_dispatch_unlocked(m);
   } else {
     return false;
   }
+#else
+  return false;
+#endif
 }
 
 bool MDSDaemon::ms_get_authorizer(int dest_type, AuthAuthorizer **authorizer, bool force_new)
@@ -1231,13 +1252,15 @@ bool MDSDaemon::handle_core_message(Message *m)
     // misc
   case MSG_MON_COMMAND:
     ALLOW_MESSAGES_FROM(CEPH_ENTITY_TYPE_MON);
+    // Old style "mds tell", comes from a mon
     handle_command(static_cast<MMonCommand*>(m));
     break;
 
-    // OSD
   case MSG_COMMAND:
+    // New style "tell mds.0", comes from clients
     handle_command(static_cast<MCommand*>(m));
     break;
+  // OSD
   case CEPH_MSG_OSD_MAP:
     ALLOW_MESSAGES_FROM(CEPH_ENTITY_TYPE_MON | CEPH_ENTITY_TYPE_OSD);
 
@@ -1258,28 +1281,6 @@ void MDSDaemon::ms_handle_connect(Connection *con)
 
 bool MDSDaemon::ms_handle_reset(Connection *con)
 {
-  if (con->get_peer_type() != CEPH_ENTITY_TYPE_CLIENT)
-    return false;
-
-  Mutex::Locker l(mds_lock);
-  if (stopping) {
-    return false;
-  }
-  dout(5) << "ms_handle_reset on " << con->get_peer_addr() << dendl;
-  if (beacon.get_want_state() == CEPH_MDS_STATE_DNE)
-    return false;
-
-  Session *session = static_cast<Session *>(con->get_priv());
-  if (session) {
-    if (session->is_closed()) {
-      dout(3) << "ms_handle_reset closing connection for session " << session->info.inst << dendl;
-      con->mark_down();
-      con->set_priv(NULL);
-    }
-    session->put();
-  } else {
-    con->mark_down();
-  }
   return false;
 }
 

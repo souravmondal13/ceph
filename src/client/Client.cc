@@ -1937,7 +1937,7 @@ MetaSession *Client::_open_mds_session(mds_rank_t mds)
   MetaSession *session = new MetaSession;
   session->mds_num = mds;
   session->seq = 0;
-  session->inst = mdsmap->get_inst(mds);
+  session->inst = mdsmap->get_server_inst(mds);
   session->con = messenger->get_connection(session->inst);
   session->state = MetaSession::STATE_OPENING;
   mds_sessions[mds] = session;
@@ -2507,10 +2507,10 @@ void Client::handle_mds_map(MMDSMap* m)
     int oldstate = oldmap->get_state(p->first);
     int newstate = mdsmap->get_state(p->first);
     if (!mdsmap->is_up(p->first) ||
-	mdsmap->get_inst(p->first) != p->second->inst) {
+	mdsmap->get_server_inst(p->first) != p->second->inst) {
       p->second->con->mark_down();
       if (mdsmap->is_up(p->first)) {
-	p->second->inst = mdsmap->get_inst(p->first);
+	p->second->inst = mdsmap->get_server_inst(p->first);
 	// When new MDS starts to take over, notify kernel to trim unused entries
 	// in its dcache/icache. Hopefully, the kernel will release some unused
 	// inodes before the new MDS enters reconnect state.
@@ -2522,7 +2522,7 @@ void Client::handle_mds_map(MMDSMap* m)
     if (newstate == MDSMap::STATE_RECONNECT &&
 	mds_sessions.count(p->first)) {
       MetaSession *session = mds_sessions[p->first];
-      session->inst = mdsmap->get_inst(p->first);
+      session->inst = mdsmap->get_server_inst(p->first);
       session->con = messenger->get_connection(session->inst);
       send_reconnect(session);
     }
@@ -5361,7 +5361,7 @@ int Client::mds_command(
     const auto info = fsmap->get_info_gid(target_gid);
 
     // Open a connection to the target MDS
-    entity_inst_t inst = info.get_inst();
+    entity_inst_t inst = info.get_server_inst();
     ConnectionRef conn = messenger->get_connection(inst);
 
     // Generate CommandOp state
@@ -11892,7 +11892,7 @@ void Client::ms_handle_remote_reset(Connection *con)
       for (map<mds_rank_t,MetaSession*>::iterator p = mds_sessions.begin();
 	   p != mds_sessions.end();
 	   ++p) {
-	if (mdsmap->get_addr(p->first) == con->get_peer_addr()) {
+	if (mdsmap->get_server_addr(p->first) == con->get_peer_addr()) {
 	  mds = p->first;
 	  s = p->second;
 	}
