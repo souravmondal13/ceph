@@ -1030,7 +1030,7 @@ void MDSDaemon::handle_mds_map(MMDSMap *m)
       // Replace our 0.0.0.0 in the server messenger with the
       // real address, which the mon has read out of our messages
       // and put into the mdsmap for us.
-      //server_messenger->set_myaddr(mdsmap->get_server_addr(whoami));
+      server_messenger->set_addr_unknowns(mdsmap->get_server_addr(whoami));
 
       dout(10) <<  __func__ << ": initializing MDS rank "
                << mds_rank->get_nodeid() << dendl;

@@ -201,7 +201,7 @@ public:
    * currently believes to be its own.
    */
   const entity_addr_t& get_myaddr() { return my_inst.addr; }
-
+protected:
   /**
    * set messenger's address
    */
