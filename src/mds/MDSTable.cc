@@ -133,8 +133,10 @@ public:
 object_t MDSTable::get_object_name()
 {
   char n[50];
-  if (per_mds)
+  if (per_mds) {
     snprintf(n, sizeof(n), "mds%d_%s", int(mds->get_nodeid()), table_name);
+    dout(0) << "MDSTable::get_object_name = " << n << dendl;
+  }
   else
     snprintf(n, sizeof(n), "mds_%s", table_name);
   return object_t(n);

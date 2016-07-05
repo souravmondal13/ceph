@@ -3839,23 +3839,27 @@ void CInode::validate_disk_state(CInode::validated_data *results,
         }
       }
 next:
-      if (1) {
-	      std::stringstream ds;
-	      inode_t& inode = in->inode;
-	      JSONFormatter *f = new JSONFormatter();
-              MDCache *mdcache = in->mdcache;
+      // Tracker: 15619
+      {
+        std::stringstream ds;
+        inode_t& inode = in->inode;
+        JSONFormatter *f = new JSONFormatter();
+        MDCache *mdcache = in->mdcache;
+        bool inotable_changed = false;
 
-	      mdcache->mds->inotable->dump(f);
-	      f->flush(ds);
-	      dout(0) << "scrub: inotable: adding ino = " << inode.ino <<dendl;
-	      dout(0) << "scrub: inotable status: before = "<< ds.str() << dendl;
-	      mdcache->mds->inotable->repair_inotable(inode.ino);
-	      mdcache->mds->inotable->save();
+        mdcache->mds->inotable->dump(f);
+        f->flush(ds);
+        dout(10) << "scrub: inotable: adding ino = " << inode.ino <<dendl;
+        dout(10) << "scrub: inotable status: before = "<< ds.str() << dendl;
 
-	      mdcache->mds->inotable->dump(f);
-	      f->flush(ds);
-	      dout(0) << "scrub: inotable status: after= "<< ds.str() << dendl;
-	      delete f;
+        inotable_changed = mdcache->mds->inotable->repair_inotable(inode.ino);
+        if (inotable_changed)
+          mdcache->mds->inotable->save();
+
+        mdcache->mds->inotable->dump(f);
+        f->flush(ds);
+        dout(10) << "scrub: inotable status: after= "<< ds.str() << dendl;
+        delete f;
       }
 
       // quit if we're a file, or kick off directory checks otherwise
