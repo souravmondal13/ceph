@@ -191,21 +191,25 @@ void InoTable::generate_test_instances(list<InoTable*>& ls)
   ls.push_back(new InoTable());
 }
 
-
-bool InoTable::repair_inotable(inodeno_t id)
+bool InoTable::is_marked_free(inodeno_t id) const
 {
-  if (free.contains(id)) {
-    dout(0) << "repair_inotable: adding ino" << id << "to inotable" << dendl;
-    dout(0) << "repair_inotable: before status. ino=" << id << "pver =" << projected_version << "ver= " << version << dendl;
-    free.erase(id);
-    projected_free.erase(id);
-    ++projected_version;
-    ++version;
-    dout(0) << "repair_inotable: after status. ino=" << id << "pver =" << projected_version << "ver= " << version << dendl;
-    return true;
-  } else {
-    dout(0) << "repair inotable " << id << dendl;
-    dout(0) << "repair_inotable: Skipping ino=" << id << "pver =" << projected_version << "ver= " << version << dendl;
+  return free.contains(id) || projected_free.contains(id);
+}
+
+bool InoTable::repair(inodeno_t id)
+{
+  if (projected_version != version) {
+    // Can't do the repair while other things are in flight
     return false;
   }
+  assert(is_marked_free(id));
+  dout(10) << "repair: adding ino" << id << "to inotable" << dendl;
+  dout(10) << "repair: before status. ino=" << id << "pver =" << projected_version << "ver= " << version << dendl;
+  free.erase(id);
+  projected_free.erase(id);
+  ++projected_version;
+  ++version;
+  dout(10) << "repair: after status. ino=" << id << "pver =" << projected_version << "ver= " << version << dendl;
+  return true;
 }
+

@@ -3839,27 +3839,50 @@ void CInode::validate_disk_state(CInode::validated_data *results,
         }
       }
 next:
-      // Tracker: 15619
+      // If the inode's number was free in the InoTable, fix that
+      // (#15619)
       {
+        MDCache *mdcache = in->mdcache;  // For the benefit of dout_prefix
+
+        const inode_t& inode = in->inode;
+        InoTable *inotable = in->mdcache->mds->inotable;
+
+        JSONFormatter f;
         std::stringstream ds;
-        inode_t& inode = in->inode;
-        JSONFormatter *f = new JSONFormatter();
-        MDCache *mdcache = in->mdcache;
-        bool inotable_changed = false;
+        inotable->dump(&f);
+        f.flush(ds);
+        dout(10) << "scrub: inotable ino = " << std::dec << in->inode.ino << dendl;
+        dout(10) << "scrub: inotable ino = 0x" << std::hex << in->inode.ino << std::dec << dendl;
+        dout(10) << "scrub: inotable status = "<< ds.str() << dendl;
+        dout(10) << "scrub: inotable free says " << inotable->is_marked_free(inode.ino) << dendl;
 
-        mdcache->mds->inotable->dump(f);
-        f->flush(ds);
-        dout(10) << "scrub: inotable: adding ino = " << inode.ino <<dendl;
-        dout(10) << "scrub: inotable status: before = "<< ds.str() << dendl;
+        if (inotable->is_marked_free(inode.ino)) {
+          LogChannelRef clog = in->mdcache->mds->clog;
+          clog->error() << "inode wrongly marked free: 0x" << std::hex
+                        << inode.ino;
+          if (in->scrub_infop->header && in->scrub_infop->header->repair) {
+            bool repaired = inotable->repair(inode.ino);
+            if (repaired) {
+              clog->error() << "inode table repaired for inode: 0x" << std::hex
+                            << inode.ino;
+              JSONFormatter f;
+              std::stringstream ds;
+              inotable->dump(&f);
+              f.flush(ds);
+              dout(10) << "scrub: inotable status: before = "<< ds.str() << dendl;
+              f.reset();
 
-        inotable_changed = mdcache->mds->inotable->repair_inotable(inode.ino);
-        if (inotable_changed)
-          mdcache->mds->inotable->save();
+              inotable->save();
 
-        mdcache->mds->inotable->dump(f);
-        f->flush(ds);
-        dout(10) << "scrub: inotable status: after= "<< ds.str() << dendl;
-        delete f;
+              inotable->dump(&f);
+              f.flush(ds);
+              dout(10) << "scrub: inotable status: after= "<< ds.str() << dendl;
+            } else {
+              clog->error() << "Cannot repair inotable while other operations"
+                " are in progress";
+            }
+          }
+        }
       }
 
       // quit if we're a file, or kick off directory checks otherwise
