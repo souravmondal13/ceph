@@ -753,6 +753,11 @@ do
 	    $SUDO $CEPH_ADM -i $key_fn auth add mgr.$name mon 'allow *'
     fi
 
+	cat <<EOF >> $conf_fn
+[mgr.$name]
+
+EOF
+
     echo "Starting mgr.${name}"
 	run 'mgr' $CEPH_BIN/ceph-mgr -i $name
 
