@@ -348,3 +348,4 @@ bool MgrClient::handle_command_reply(MCommandReply *m)
   m->put();
   return true;
 }
+
