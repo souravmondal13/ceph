@@ -147,13 +147,7 @@ private:
 			  int threshold,
 			  vector<string>& args) const;
 
-  void dump_object_stat_sum(TextTable &tbl, Formatter *f,
-			    object_stat_sum_t &sum,
-			    uint64_t avail,
-			    float raw_used_rate,
-			    bool verbose, const pg_pool_t *pool) const;
 
-  int64_t get_rule_avail(OSDMap& osdmap, int ruleno) const;
 
 public:
   PGMonitor(Monitor *mn, Paxos *p, const string& service_name)
@@ -190,9 +184,6 @@ public:
   void tick();  // check state, take actions
 
   void check_osd_map(epoch_t epoch);
-
-  void dump_pool_stats(stringstream &ss, Formatter *f, bool verbose);
-  void dump_fs_stats(stringstream &ss, Formatter *f, bool verbose) const;
 
   void dump_info(Formatter *f) const;
 
