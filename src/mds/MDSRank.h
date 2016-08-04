@@ -258,6 +258,7 @@ class MDSRank {
     epoch_t      last_client_mdsmap_bcast;
 
     void create_logger();
+    void update_logger();
   public:
 
     void queue_waiter(MDSInternalContextBase *c) {

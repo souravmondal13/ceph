@@ -215,6 +215,10 @@ void MDSRankDispatcher::tick()
       snapserver->check_osd_map(false);
   }
 
+  // Catch async changes to stats that happened outside of dispatch, e.g.
+  // purging strays.
+  update_logger();
+
   // Expose ourselves to Beacon to update health indicators
   beacon.notify_health(this);
 }
@@ -539,23 +543,7 @@ bool MDSRank::_dispatch(Message *m, bool new_msg)
   }
   */
 
-  if (mlogger) {
-    mlogger->set(l_mdm_ino, g_num_ino);
-    mlogger->set(l_mdm_dir, g_num_dir);
-    mlogger->set(l_mdm_dn, g_num_dn);
-    mlogger->set(l_mdm_cap, g_num_cap);
-
-    mlogger->inc(l_mdm_inoa, g_num_inoa);  g_num_inoa = 0;
-    mlogger->inc(l_mdm_inos, g_num_inos);  g_num_inos = 0;
-    mlogger->inc(l_mdm_dira, g_num_dira);  g_num_dira = 0;
-    mlogger->inc(l_mdm_dirs, g_num_dirs);  g_num_dirs = 0;
-    mlogger->inc(l_mdm_dna, g_num_dna);  g_num_dna = 0;
-    mlogger->inc(l_mdm_dns, g_num_dns);  g_num_dns = 0;
-    mlogger->inc(l_mdm_capa, g_num_capa);  g_num_capa = 0;
-    mlogger->inc(l_mdm_caps, g_num_caps);  g_num_caps = 0;
-
-    mlogger->set(l_mdm_buf, buffer::get_total_alloc());
-  }
+  update_logger();
 
   // shut down?
   if (is_stopping()) {
@@ -2626,5 +2614,26 @@ bool MDSRankDispatcher::handle_command(
 epoch_t MDSRank::get_osd_epoch() const
 {
   return objecter->with_osdmap(std::mem_fn(&OSDMap::get_epoch));  
+}
+
+void MDSRank::update_logger()
+{
+  if (mlogger) {
+    mlogger->set(l_mdm_ino, g_num_ino);
+    mlogger->set(l_mdm_dir, g_num_dir);
+    mlogger->set(l_mdm_dn, g_num_dn);
+    mlogger->set(l_mdm_cap, g_num_cap);
+
+    mlogger->inc(l_mdm_inoa, g_num_inoa);  g_num_inoa = 0;
+    mlogger->inc(l_mdm_inos, g_num_inos);  g_num_inos = 0;
+    mlogger->inc(l_mdm_dira, g_num_dira);  g_num_dira = 0;
+    mlogger->inc(l_mdm_dirs, g_num_dirs);  g_num_dirs = 0;
+    mlogger->inc(l_mdm_dna, g_num_dna);  g_num_dna = 0;
+    mlogger->inc(l_mdm_dns, g_num_dns);  g_num_dns = 0;
+    mlogger->inc(l_mdm_capa, g_num_capa);  g_num_capa = 0;
+    mlogger->inc(l_mdm_caps, g_num_caps);  g_num_caps = 0;
+
+    mlogger->set(l_mdm_buf, buffer::get_total_alloc());
+  }
 }
 
