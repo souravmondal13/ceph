@@ -120,7 +120,7 @@ public:
 
   void show_imports(bool external=false);
 
-  void queue_split(CDir *dir);
+  void queue_split(const CDir *dir, bool fast);
   void queue_merge(CDir *dir);
 
 };

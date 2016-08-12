@@ -449,9 +449,10 @@ private:
 typedef C_GatherBase<Context, Context> C_Gather;
 typedef C_GatherBuilderBase<Context, C_Gather > C_GatherBuilder;
 
-class FunctionContext : public Context {
+template<template<typename> typename A>
+class FunctionContextBase : public Context {
 public:
-  FunctionContext(const boost::function<void(int)> &callback)
+  FunctionContextBase(const A<void(int)> &callback)
     : m_callback(callback)
   {
   }
@@ -460,8 +461,11 @@ public:
     m_callback(r);
   }
 private:
-  boost::function<void(int)> m_callback;
+  A<void(int)> m_callback;
 };
+
+typedef FunctionContextBase<boost::function> FunctionContext;
+typedef FunctionContextBase<std::function> StdFunctionContext;
 
 #undef mydout
 

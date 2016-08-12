@@ -537,10 +537,18 @@ EOF
         keyring = $keyring_fn
         log file = $CEPH_OUT_DIR/\$name.\$pid.log
         admin socket = $CEPH_OUT_DIR/\$name.\$pid.asok
+        client cache size = 100
 
 [mds]
 $DAEMONOPTS
 $CMDSDEBUG
+        mds cache size = 1000
+        mds bal frag = true                                                      
+        mds bal fragment size max = 17                                          
+        mds bal split size = 10                                                  
+        mds bal merge size = 4                                                   
+        mds bal split bits = 1                                                   
+                                                                                
         mds debug frag = true
         mds debug auth pins = true
         mds debug subtrees = true
@@ -549,7 +557,7 @@ $CMDSDEBUG
         mds root ino gid = `id -g`
 $extra_conf
 [mgr]
-        mgr modules = rest fsstatus
+        mgr modules = fsstatus
         mgr data = $CEPH_DEV_DIR/mgr.\$id
         mgr module path = $MGR_PYTHON_PATH
 $DAEMONOPTS
@@ -696,6 +704,8 @@ if [ "$start_mds" -eq 1 -a "$CEPH_NUM_MDS" -gt 0 ]; then
         ceph_adm osd pool create "cephfs_data_${name}" 8
         ceph_adm osd pool create "cephfs_metadata_${name}" 8
         ceph_adm fs new "cephfs_${name}" "cephfs_metadata_${name}" "cephfs_data_${name}"
+        ceph_adm fs set "cephfs_${name}" allow_dirfrags true --yes-i-really-mean-it
+        ceph_adm fs set "cephfs_${name}" allow_multimds true --yes-i-really-mean-it
         fs=$(($fs + 1))
         [ $fs -eq $CEPH_NUM_FS ] && break
     done

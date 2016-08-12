@@ -11053,7 +11053,7 @@ void MDCache::dispatch_fragment_dir(MDRequestRef& mdr)
     dout(10) << " can't auth_pin " << *diri << ", requeuing dir "
 	     << info.dirs.front()->dirfrag() << dendl;
     if (info.bits > 0)
-      mds->balancer->queue_split(info.dirs.front());
+      mds->balancer->queue_split(info.dirs.front(), false);
     else
       mds->balancer->queue_merge(info.dirs.front());
     fragment_unmark_unfreeze_dirs(info.dirs);
