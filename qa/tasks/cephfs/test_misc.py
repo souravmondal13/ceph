@@ -44,19 +44,29 @@ class TestMisc(CephFSTestCase):
         """
 
         self.mount_b.umount_wait();
-        ls_data = self._session_list()
+        ls_data = self.fs.mds_asok(['session', 'ls'])
         self.assert_session_count(1, ls_data)
+
+        self.mount_a.kill();
+        self.mount_a.kill_cleanup();
 
         time.sleep(self.mds_session_autoclose * 1.5)
-        ls_data = self._session_list()
+        ls_data = self.fs.mds_asok(['session', 'ls'])
         self.assert_session_count(1, ls_data)
 
+        self.mount_a.mount()
+        self.mount_a.wait_until_mounted()
         self.mount_b.mount()
         self.mount_b.wait_until_mounted()
 
         ls_data = self._session_list()
         self.assert_session_count(2, ls_data)
 
+        self.mount_a.kill()
+        self.mount_a.kill()
+        self.mount_b.kill_cleanup()
+        self.mount_b.kill_cleanup()
+
         time.sleep(self.mds_session_autoclose * 1.5)
-        ls_data = self._session_list()
+        ls_data = self.fs.mds_asok(['session', 'ls'])
         self.assert_session_count(1, ls_data)
