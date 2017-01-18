@@ -3218,6 +3218,7 @@ void MDCache::handle_resolve(MMDSResolve *m)
 	    claimed_by_sender = true;
 	}
 
+	my_ambiguous_imports.erase(p);  // no longer ambiguous.
 	if (claimed_by_sender) {
 	  dout(7) << "ambiguous import failed on " << *dir << dendl;
 	  migrator->import_reverse(dir);
@@ -3225,7 +3226,6 @@ void MDCache::handle_resolve(MMDSResolve *m)
 	  dout(7) << "ambiguous import succeeded on " << *dir << dendl;
 	  migrator->import_finish(dir, true);
 	}
-	my_ambiguous_imports.erase(p);  // no longer ambiguous.
       }
       p = next;
     }
@@ -3518,7 +3518,7 @@ void MDCache::disambiguate_imports()
     map<dirfrag_t, vector<dirfrag_t> >::iterator q = my_ambiguous_imports.begin();
 
     CDir *dir = get_dirfrag(q->first);
-    if (!dir) continue;
+    assert(dir);
     
     if (dir->authority() != me_ambig) {
       dout(10) << "ambiguous import auth known, must not be me " << *dir << dendl;
