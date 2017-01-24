@@ -1,5 +1,5 @@
 
-os_type: ubuntu
+os_type: centos
 
 overrides:
   ceph:
