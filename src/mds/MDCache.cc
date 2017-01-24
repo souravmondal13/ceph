@@ -2518,6 +2518,8 @@ ESubtreeMap *MDCache::create_subtree_map()
     mydir = myin->get_dirfrag(frag_t());
   }
 
+  list<CDir*> maybe;
+
   // include all auth subtrees, and their bounds.
   // and a spanning tree to tie it to the root.
   for (map<CDir*, set<CDir*> >::iterator p = subtrees.begin();
@@ -2544,6 +2546,15 @@ ESubtreeMap *MDCache::create_subtree_map()
     }
 
     le->subtrees[dir->dirfrag()].clear();
+
+    if (dir->get_dir_auth().second != CDIR_AUTH_UNKNOWN &&
+	le->ambiguous_subtrees.count(dir->dirfrag()) == 0 &&
+	p->second.empty()) {
+      dout(10) << " maybe journal " << *dir << dendl;
+      maybe.push_back(dir);
+      continue;
+    }
+
     le->metablob.add_dir_context(dir, EMetaBlob::TO_ROOT);
     le->metablob.add_dir(dir, false);
 
@@ -2655,6 +2666,18 @@ ESubtreeMap *MDCache::create_subtree_map()
       }
     }
   }
+
+  for (list<CDir*>::iterator p = maybe.begin(); p != maybe.end(); ++p) {
+    CDir *dir = *p;
+    if (le->subtrees.count(dir->dirfrag())) {
+      // not swallowed by above code
+      le->metablob.add_dir_context(dir, EMetaBlob::TO_ROOT);
+      le->metablob.add_dir(dir, false);
+    } else {
+      dout(10) << "simplify: not journal " << *dir << dendl;
+    }
+  }
+
   dout(15) << " subtrees " << le->subtrees << dendl;
   dout(15) << " ambiguous_subtrees " << le->ambiguous_subtrees << dendl;
 
@@ -2862,9 +2885,6 @@ void MDCache::handle_mds_failure(mds_rank_t who)
 {
   dout(7) << "handle_mds_failure mds." << who << dendl;
   
-  // make note of recovery set
-  mds->mdsmap->get_recovery_mds_set(recovery_set);
-  recovery_set.erase(mds->get_nodeid());
   dout(1) << "handle_mds_failure mds." << who << " : recovery peers are " << recovery_set << dendl;
 
   resolve_gather.insert(who);
@@ -3222,6 +3242,7 @@ void MDCache::handle_resolve(MMDSResolve *m)
 	    claimed_by_sender = true;
 	}
 
+	my_ambiguous_imports.erase(p);  // no longer ambiguous.
 	if (claimed_by_sender) {
 	  dout(7) << "ambiguous import failed on " << *dir << dendl;
 	  migrator->import_reverse(dir);
@@ -3229,7 +3250,6 @@ void MDCache::handle_resolve(MMDSResolve *m)
 	  dout(7) << "ambiguous import succeeded on " << *dir << dendl;
 	  migrator->import_finish(dir, true);
 	}
-	my_ambiguous_imports.erase(p);  // no longer ambiguous.
       }
       p = next;
     }
@@ -3522,11 +3542,13 @@ void MDCache::disambiguate_imports()
     map<dirfrag_t, vector<dirfrag_t> >::iterator q = my_ambiguous_imports.begin();
 
     CDir *dir = get_dirfrag(q->first);
-    if (!dir) continue;
+    assert(dir);
     
     if (dir->authority() != me_ambig) {
       dout(10) << "ambiguous import auth known, must not be me " << *dir << dendl;
       cancel_ambiguous_import(dir);
+
+      mds->mdlog->start_submit_entry(new EImportFinish(dir, false));
 
       // subtree may have been swallowed by another node claiming dir
       // as their own.
@@ -3535,8 +3557,6 @@ void MDCache::disambiguate_imports()
 	dout(10) << "  subtree root is " << *root << dendl;
       assert(root->dir_auth.first != mds->get_nodeid());  // no us!
       try_trim_non_auth_subtree(root);
-
-      mds->mdlog->start_submit_entry(new EImportFinish(dir, false));
     } else {
       dout(10) << "ambiguous import auth unclaimed, must be me " << *dir << dendl;
       finish_ambiguous_import(q->first);
