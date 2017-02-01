@@ -6,6 +6,9 @@ tasks:
         - fs/norstats
 
 overrides:
+  kclient:
+    client.0:
+      no_rsize: true
   ceph:
     conf:
       client:

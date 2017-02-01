@@ -1,0 +1,12 @@
+tasks:
+- kclient:
+- workunit:
+    timeout: 6h
+    clients:
+      all:
+        - fs/norstats
+
+overrides:
+  kclient:
+    client.0:
+      no_rsize: true
