@@ -7,9 +7,13 @@ from teuthology import misc
 
 from teuthology.orchestra import remote as orchestra_remote
 from teuthology.orchestra import run
+from teuthology.contextutil import MaxWhileTries
 from .mount import CephFSMount
 
 log = logging.getLogger(__name__)
+
+
+UMOUNT_TIMEOUT = 300
 
 
 class KernelMount(CephFSMount):
@@ -103,13 +107,15 @@ class KernelMount(CephFSMount):
 
         self.client_remote.run(args=cmd)
 
-        self.client_remote.run(
+        rproc = self.client_remote.run(
             args=[
                 'rmdir',
                 '--',
                 self.mountpoint,
             ],
+            wait=False
         )
+        run.wait([rproc], UMOUNT_TIMEOUT)
         self.mounted = False
 
     def cleanup(self):
@@ -124,7 +130,7 @@ class KernelMount(CephFSMount):
 
         try:
             self.umount(force)
-        except CommandFailedError:
+        except (CommandFailedError, MaxWhileTries):
             if not force:
                 raise
 
