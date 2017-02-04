@@ -46,7 +46,7 @@ Mgr::Mgr(MonClient *monc_, Messenger *clientm_, Objecter *objecter_) :
   timer(g_ceph_context, lock),
   finisher(g_ceph_context, "Mgr", "mgr-fin"),
   waiting_for_fs_map(NULL),
-  py_modules(daemon_state, cluster_state, *monc, finisher),
+  py_modules(daemon_state, cluster_state, *monc, *objecter, finisher),
   cluster_state(monc, nullptr),
   server(monc, daemon_state, cluster_state, py_modules),
   initialized(false),
