@@ -1547,7 +1547,7 @@ public:
 
   };
 
-  int submit_command(CommandOp *c, ceph_tid_t *ptid);
+  void submit_command(CommandOp *c, ceph_tid_t *ptid);
   int _calc_command_target(CommandOp *c, shunique_lock &sul);
   void _assign_command_session(CommandOp *c, shunique_lock &sul);
   void _send_command(CommandOp *c);
@@ -2102,7 +2102,7 @@ public:
   epoch_t op_cancel_writes(int r, int64_t pool=-1);
 
   // commands
-  int osd_command(int osd, vector<string>& cmd,
+  void osd_command(int osd, vector<string>& cmd,
 		  const bufferlist& inbl, ceph_tid_t *ptid,
 		  bufferlist *poutbl, string *prs, Context *onfinish) {
     assert(osd >= 0);
@@ -2113,9 +2113,9 @@ public:
       poutbl,
       prs,
       onfinish);
-    return submit_command(c, ptid);
+    submit_command(c, ptid);
   }
-  int pg_command(pg_t pgid, vector<string>& cmd,
+  void pg_command(pg_t pgid, vector<string>& cmd,
 		 const bufferlist& inbl, ceph_tid_t *ptid,
 		 bufferlist *poutbl, string *prs, Context *onfinish) {
     CommandOp *c = new CommandOp(
@@ -2125,7 +2125,7 @@ public:
       poutbl,
       prs,
       onfinish);
-    return submit_command(c, ptid);
+    submit_command(c, ptid);
   }
 
   // mid-level helpers

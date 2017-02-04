@@ -4647,7 +4647,7 @@ void Objecter::handle_command_reply(MCommandReply *m)
     s->put();
 }
 
-int Objecter::submit_command(CommandOp *c, ceph_tid_t *ptid)
+void Objecter::submit_command(CommandOp *c, ceph_tid_t *ptid)
 {
   shunique_lock sul(rwlock, ceph::acquire_unique);
 
@@ -4679,8 +4679,6 @@ int Objecter::submit_command(CommandOp *c, ceph_tid_t *ptid)
   *ptid = tid;
 
   logger->inc(l_osdc_command_active);
-
-  return 0;
 }
 
 int Objecter::_calc_command_target(CommandOp *c, shunique_lock& sul)
