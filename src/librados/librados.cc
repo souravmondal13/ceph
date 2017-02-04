@@ -2299,7 +2299,9 @@ int librados::Rados::osd_command(int osdid, std::string cmd, const bufferlist& i
 {
   vector<string> cmdvec;
   cmdvec.push_back(cmd);
-  return client->osd_command(osdid, cmdvec, inbl, outbl, outs);
+  client->osd_command(osdid, cmdvec, inbl, outbl, outs);
+
+  return 0;
 }
 
 int librados::Rados::mgr_command(std::string cmd, const bufferlist& inbl,
@@ -2475,13 +2477,10 @@ namespace {
     };
     bufferlist inbl, outbl;
     string outstring;
-    int ret = client.mon_command(cmd, inbl, &outbl, &outstring);
-    if (ret) {
-      return ret;
-    }
+    client.mon_command(cmd, inbl, &outbl, &outstring);
     if (!outbl.length()) {
       // no pg returned
-      return ret;
+      return 0;
     }
     JSONParser parser;
     if (!parser.parse(outbl.c_str(), outbl.length())) {
