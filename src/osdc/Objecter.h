@@ -1547,7 +1547,7 @@ public:
 
   };
 
-  int submit_command(CommandOp *c, ceph_tid_t *ptid);
+  void submit_command(CommandOp *c, ceph_tid_t *ptid);
   int _calc_command_target(CommandOp *c, shunique_lock &sul);
   void _assign_command_session(CommandOp *c, shunique_lock &sul);
   void _send_command(CommandOp *c);

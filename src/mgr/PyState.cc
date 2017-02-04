@@ -82,6 +82,13 @@ static PyObject*
 ceph_send_command(PyObject *self, PyObject *args)
 {
   char *handle = nullptr;
+
+  // Like mon, osd, mds
+  char *type = nullptr;
+
+  // Like "23" for an OSD or "myid" for an MDS
+  char *name = nullptr;
+
   char *cmd_json = nullptr;
   char *tag = nullptr;
   PyObject *completion = nullptr;
@@ -99,13 +106,40 @@ ceph_send_command(PyObject *self, PyObject *args)
   Py_DECREF(set_fn);
 
   auto c = new MonCommandCompletion(completion, tag);
-  auto r = global_handle->get_monc().start_mon_command(
-      {cmd_json},
-      {},
-      &c->outbl,
-      &c->outs,
-      c);
-  assert(r == 0);  // start_mon_command is forbidden to fail
+  if (std::string(type) == "mon") {
+    global_handle->get_monc().start_mon_command(
+        {cmd_json},
+        {},
+        &c->outbl,
+        &c->outs,
+        c);
+  } else if (std::string(type) == "osd") {
+    std::string err;
+    uint64_t osd_id = strict_strtoll(name, 10, &err);
+    if (!err.empty()) {
+      // TODO: raise exception
+      return nullptr;
+    }
+
+    ceph_tid_t tid;
+    global_handle()->get_objecter().osd_command(
+        osd_id,
+        {cmd_json},
+        {},
+        &tid,
+        &c->outbl,
+        &c->outs,
+        c);
+  } else if (std::string(type) == "mds") {
+    // TODO: expose a Client instance
+    return nullptr;
+  } else if (std::string(type) == "pgr") {
+    // TODO: expose objecter::pg_command
+    return nullptr;
+  } else {
+    // TODO: raise exception
+    return nullptr;
+  }
 
   Py_RETURN_NONE;
 }

@@ -407,10 +407,9 @@ void Mgr::handle_osd_map()
         std::ostringstream cmd;
         cmd << "{\"prefix\": \"osd metadata\", \"id\": "
             << osd_id << "}";
-        int r = monc->start_mon_command(
+        monc->start_mon_command(
             {cmd.str()},
             {}, &c->outbl, &c->outs, c);
-        assert(r == 0);  // start_mon_command defined to not fail
       }
     }
 
@@ -533,10 +532,9 @@ void Mgr::handle_fs_map(MFSMap* m)
       std::ostringstream cmd;
       cmd << "{\"prefix\": \"mds metadata\", \"who\": \""
           << info.name << "\"}";
-      int r = monc->start_mon_command(
+      monc->start_mon_command(
           {cmd.str()},
           {}, &c->outbl, &c->outs, c);
-      assert(r == 0);  // start_mon_command defined to not fail
     }
   }
 }
