@@ -357,6 +357,57 @@ class Module(MgrModule):
             def filesystem_data(self, fs_id):
                 return global_instance().fs_status(int(fs_id))
 
+            def _osd(self, osd_id):
+                #global_instance().fs_status(int(fs_id))
+                osd_id = int(osd_id)
+
+                osd_map = global_instance().get("osd_map")
+
+                osd = None
+                for o in osd_map['osds']:
+                    if o['osd'] == osd_id:
+                        osd = o
+                        break
+
+                assert osd is not None  # TODO 400
+
+                osd_spec = "{0}".format(osd_id) 
+
+                osd_metadata = global_instance().get_metadata(
+                        "osd", osd_spec)
+
+                result = CommandResult("")
+                global_instance().send_command(result, "osd", osd_spec,
+                       json.dumps({
+                           "prefix": "perf histogram dump",
+                           }),
+                       "")
+                r, outb, outs = result.wait()
+                assert r == 0
+                histogram = json.loads(outb)
+
+                return {
+                    "osd": osd,
+                    "osd_metadata": osd_metadata,
+                    "osd_histogram": histogram
+                }
+
+            @cherrypy.expose
+            def osd_perf(self, osd_id):
+                template = env.get_template("osd_perf.html")
+                toplevel_data = self._toplevel_data()
+
+                return template.render(
+                    ceph_version=global_instance().version,
+                    toplevel_data=json.dumps(toplevel_data, indent=2),
+                    content_data=json.dumps(self._osd(osd_id), indent=2)
+                )
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def osd_perf_data(self, osd_id):
+                return self._osd(osd_id)
+
             def _clients(self, fs_id):
                 mds_spec = "{0}:0".format(fs_id) 
                 result = CommandResult("")
@@ -366,6 +417,7 @@ class Module(MgrModule):
                            }),
                        "")
                 r, outb, outs = result.wait()
+                assert r == 0
                 clients = json.loads(outb)
 
                 # Decorate the metadata with some fields that will be
