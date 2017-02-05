@@ -786,7 +786,7 @@ if [ "$CEPH_NUM_MGR" -gt 0 ]; then
             mkdir -p $CEPH_DEV_DIR/mgr.$name
             key_fn=$CEPH_DEV_DIR/mgr.$name/keyring
             $SUDO $CEPH_BIN/ceph-authtool --create-keyring --gen-key --name=mgr.$name $key_fn
-            ceph_adm -i $key_fn auth add mgr.$name mon 'allow *'
+            ceph_adm -i $key_fn auth add mgr.$name mon 'allow *' mds 'allow *' osd 'allow *'
         fi
 
         cat <<EOF >> $conf_fn
