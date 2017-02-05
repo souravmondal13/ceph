@@ -302,6 +302,7 @@ class Module(MgrModule):
                 "id": fs_id,
                 "name": mdsmap['fs_name'],
                 "client_count": client_count,
+                "clients_url": "/clients/{0}/".format(fs_id),
                 "ranks": rank_table,
                 "pools": pools_table
             },
