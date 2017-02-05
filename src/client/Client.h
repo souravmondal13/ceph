@@ -604,6 +604,10 @@ protected:
   int init()  WARN_UNUSED_RESULT;
   void shutdown();
 
+  void init_lite(Objecter *objecter_);
+  void shutdown_lite();
+  bool lite;
+
   // messaging
   void handle_mds_map(class MMDSMap *m);
   void handle_fs_map(class MFSMap *m);

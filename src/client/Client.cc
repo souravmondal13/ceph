@@ -253,7 +253,8 @@ Client::Client(Messenger *m, MonClient *mc)
     mounted(false), unmounting(false),
     local_osd(-1), local_osd_epoch(0),
     unsafe_sync_write(0),
-    client_lock("Client::client_lock")
+    client_lock("Client::client_lock"),
+    lite(false)
 {
   monclient->set_messenger(m);
 
@@ -310,7 +311,9 @@ Client::~Client()
   delete writeback_handler;
 
   delete filer;
-  delete objecter;
+  if (!lite) {
+    delete objecter;
+  }
 
   delete logger;
 }
@@ -463,6 +466,83 @@ void Client::dump_status(Formatter *f)
   }
 }
 
+// Hacky halfway version of letting Client layer itself
+// on top of existing monclient/objecter instances (and ultimately
+// let libcephfs layer propery on top of librados)
+// Caller is responsible for add_dispatcher_tail call connection
+// messenger to this instance.
+// Caller is responsible for proper monc set_want_keys call
+void Client::init_lite(Objecter *objecter_)
+{
+  //delete objecter;  // the one from constructor that we never touched
+  // (skipping dlete because destructor gets stuck joining a timer that was never started)
+  objecter = objecter_;
+
+  timer.init();
+  objectcacher->start();
+
+  client_lock.Lock();
+  assert(!initialized);
+
+  // logger
+  PerfCountersBuilder plb(cct, "client", l_c_first, l_c_last);
+  plb.add_time_avg(l_c_reply, "reply", "Latency of receiving a reply on metadata request");
+  plb.add_time_avg(l_c_lat, "lat", "Latency of processing a metadata request");
+  plb.add_time_avg(l_c_wrlat, "wrlat", "Latency of a file data write operation");
+  logger = plb.create_perf_counters();
+  cct->get_perfcounters_collection()->add(logger);
+
+  client_lock.Unlock();
+
+  cct->_conf->add_observer(this);
+
+  AdminSocket* admin_socket = cct->get_admin_socket();
+  int ret = admin_socket->register_command("mds_requests",
+					   "mds_requests",
+					   &m_command_hook,
+					   "show in-progress mds requests");
+  if (ret < 0) {
+    lderr(cct) << "error registering admin socket command: "
+	       << cpp_strerror(-ret) << dendl;
+  }
+  ret = admin_socket->register_command("mds_sessions",
+				       "mds_sessions",
+				       &m_command_hook,
+				       "show mds session state");
+  if (ret < 0) {
+    lderr(cct) << "error registering admin socket command: "
+	       << cpp_strerror(-ret) << dendl;
+  }
+  ret = admin_socket->register_command("dump_cache",
+				       "dump_cache",
+				       &m_command_hook,
+				       "show in-memory metadata cache contents");
+  if (ret < 0) {
+    lderr(cct) << "error registering admin socket command: "
+	       << cpp_strerror(-ret) << dendl;
+  }
+  ret = admin_socket->register_command("kick_stale_sessions",
+				       "kick_stale_sessions",
+				       &m_command_hook,
+				       "kick sessions that were remote reset");
+  if (ret < 0) {
+    lderr(cct) << "error registering admin socket command: "
+	       << cpp_strerror(-ret) << dendl;
+  }
+  ret = admin_socket->register_command("status",
+				       "status",
+				       &m_command_hook,
+				       "show overall client status");
+  if (ret < 0) {
+    lderr(cct) << "error registering admin socket command: "
+	       << cpp_strerror(-ret) << dendl;
+  }
+
+  client_lock.Lock();
+  initialized = true;
+  client_lock.Unlock();
+}
+
 int Client::init()
 {
   timer.init();
@@ -547,6 +627,64 @@ int Client::init()
   initialized = true;
   client_lock.Unlock();
   return r;
+}
+
+void Client::shutdown_lite()
+{
+  ldout(cct, 1) << "shutdown" << dendl;
+
+  // If we were not mounted, but were being used for sending
+  // MDS commands, we may have sessions that need closing.
+  client_lock.Lock();
+  _close_sessions();
+  client_lock.Unlock();
+
+  cct->_conf->remove_observer(this);
+
+  AdminSocket* admin_socket = cct->get_admin_socket();
+  admin_socket->unregister_command("mds_requests");
+  admin_socket->unregister_command("mds_sessions");
+  admin_socket->unregister_command("dump_cache");
+  admin_socket->unregister_command("kick_stale_sessions");
+  admin_socket->unregister_command("status");
+
+  if (ino_invalidate_cb) {
+    ldout(cct, 10) << "shutdown stopping cache invalidator finisher" << dendl;
+    async_ino_invalidator.wait_for_empty();
+    async_ino_invalidator.stop();
+  }
+
+  if (dentry_invalidate_cb) {
+    ldout(cct, 10) << "shutdown stopping dentry invalidator finisher" << dendl;
+    async_dentry_invalidator.wait_for_empty();
+    async_dentry_invalidator.stop();
+  }
+
+  if (switch_interrupt_cb) {
+    ldout(cct, 10) << "shutdown stopping interrupt finisher" << dendl;
+    interrupt_finisher.wait_for_empty();
+    interrupt_finisher.stop();
+  }
+
+  if (remount_cb) {
+    ldout(cct, 10) << "shutdown stopping remount finisher" << dendl;
+    remount_finisher.wait_for_empty();
+    remount_finisher.stop();
+  }
+
+  objectcacher->stop();  // outside of client_lock! this does a join.
+
+  client_lock.Lock();
+  assert(initialized);
+  initialized = false;
+  timer.shutdown();
+  client_lock.Unlock();
+
+  if (logger) {
+    cct->get_perfcounters_collection()->remove(logger);
+    delete logger;
+    logger = NULL;
+  }
 }
 
 void Client::shutdown() 
