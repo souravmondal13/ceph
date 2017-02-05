@@ -25,6 +25,9 @@
 #include "DaemonState.h"
 #include "ClusterState.h"
 
+class Objecter;
+class Client;
+
 class MMgrMap;
 class Mgr;
 
@@ -32,6 +35,7 @@ class MgrStandby : public Dispatcher {
 protected:
   MonClient *monc;
   Objecter *objecter;
+  std::unique_ptr<Client> client;
   Messenger *client_messenger;
 
   Mutex lock;

@@ -15,6 +15,9 @@
 
 #include "common/errno.h"
 #include "mon/MonClient.h"
+#include "osdc/Objecter.h"
+#include "client/Client.h"
+
 #include "include/stringify.h"
 #include "global/global_context.h"
 #include "global/signal_handler.h"
@@ -42,6 +45,7 @@ MgrStandby::MgrStandby() :
 {
   client_messenger = Messenger::create_client_messenger(g_ceph_context, "mgr");
   objecter = new Objecter(g_ceph_context, client_messenger, monc, NULL, 0, 0);
+  client.reset(new Client(client_messenger, monc));
 }
 
 
@@ -59,6 +63,8 @@ int MgrStandby::init()
 
   // Initialize Messenger
   client_messenger->add_dispatcher_tail(this);
+  client_messenger->add_dispatcher_head(objecter);
+  client_messenger->add_dispatcher_tail(client.get());
   client_messenger->start();
 
   // Initialize MonClient
@@ -94,8 +100,11 @@ int MgrStandby::init()
 
   objecter->set_client_incarnation(0);
   objecter->init();
-  client_messenger->add_dispatcher_head(objecter);
   objecter->start();
+
+  // Client is going to create its own Objecter, but it shouldn't waste
+  // much because it'll never open any connections to OSDs.
+  client->init_lite(objecter);
 
   timer.init();
   send_beacon();
@@ -142,6 +151,8 @@ void MgrStandby::shutdown()
     active_mgr->shutdown();
   }
 
+  client->shutdown_lite();
+
   objecter->shutdown();
 
   timer.shutdown();
@@ -160,7 +171,7 @@ void MgrStandby::handle_mgr_map(MMgrMap* mmap)
   if (active_in_map) {
     if (!active_mgr) {
       dout(1) << "Activating!" << dendl;
-      active_mgr.reset(new Mgr(monc, client_messenger, objecter));
+      active_mgr.reset(new Mgr(monc, client_messenger, objecter, client.get()));
       active_mgr->background_init();
       dout(1) << "I am now active" << dendl;
     } else {
