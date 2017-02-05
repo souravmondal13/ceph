@@ -24,7 +24,7 @@ import sys
 import cherrypy
 import jinja2
 
-from mgr_module import MgrModule
+from mgr_module import MgrModule, CommandResult
 
 from rest.app.types import OsdMap, NotFound, Config, FsMap, MonMap, \
     PgSummary, Health, MonStatus
@@ -352,6 +352,64 @@ class Module(MgrModule):
                 )
 
             @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def filesystem_data(self, fs_id):
+                return global_instance().fs_status(int(fs_id))
+
+            def _clients(self, fs_id):
+                mds_spec = "{0}:0".format(fs_id) 
+                result = CommandResult("")
+                global_instance().send_command(result, "mds", mds_spec,
+                       json.dumps({
+                           "prefix": "session ls",
+                           }),
+                       "")
+                r, outb, outs = result.wait()
+                clients = json.loads(outb)
+
+                # Decorate the metadata with some fields that will be
+                # indepdendent of whether it's a kernel or userspace
+                # client, so that the javascript doesn't have to grok that.
+                for client in clients:
+                    if "ceph_version" in client['client_metadata']:
+                        client['type'] = "userspace"
+                        client['version'] = client['client_metadata']['ceph_version']
+                        client['hostname'] = client['client_metadata']['hostname']
+                    elif "kernel_version" in client['client_metadata']:
+                        client['type'] = "kernel"
+                        client['version'] = client['kernel_version']
+                        client['hostname'] = client['client_metadata']['hostname']
+                    else:
+                        client['type'] = "unknown"
+                        client['version'] = ""
+                        client['hostname'] = ""
+
+                return clients
+
+            @cherrypy.expose
+            def clients(self, fs_id):
+                template = env.get_template("clients.html")
+
+                toplevel_data = self._toplevel_data()
+
+                clients = self._clients(int(fs_id))
+                global_instance().log.debug(json.dumps(clients, indent=2))
+                content_data = {
+                    "clients": clients
+                }
+
+                return template.render(
+                    ceph_version=global_instance().version,
+                    toplevel_data=json.dumps(toplevel_data, indent=2),
+                    content_data=json.dumps(content_data, indent=2)
+                )
+
+            @cherrypy.expose
+            @cherrypy.tools.json_out()
+            def clients_data(self, fs_id):
+                return self._clients(int(fs_id))
+
+            @cherrypy.expose
             def health(self):
                 template = env.get_template("health.html")
                 return template.render(
@@ -415,11 +473,6 @@ class Module(MgrModule):
             @cherrypy.expose
             def index(self):
                 return self.health()
-
-            @cherrypy.expose
-            @cherrypy.tools.json_out()
-            def filesystem_data(self, fs_id):
-                return global_instance().fs_status(int(fs_id))
 
             @cherrypy.expose
             @cherrypy.tools.json_out()
