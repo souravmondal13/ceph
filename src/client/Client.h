@@ -386,6 +386,7 @@ protected:
   bool   authenticated;
   bool   mounted;
   bool   unmounting;
+  bool   blacklisted;
 
   // When an MDS has sent us a REJECT, remember that and don't
   // contact it again.  Remember which inst rejected us, so that
