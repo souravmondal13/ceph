@@ -3196,6 +3196,8 @@ void Server::handle_client_openc(MDRequestRef& mdr)
   // What kind of client caps are required to complete this operation
   uint64_t access = MAY_WRITE;
 
+  const auto default_layout = layout;
+
   // fill in any special params from client
   if (req->head.args.open.stripe_unit)
     layout.stripe_unit = req->head.args.open.stripe_unit;
@@ -3207,21 +3209,18 @@ void Server::handle_client_openc(MDRequestRef& mdr)
       (__s32)req->head.args.open.pool >= 0) {
     layout.pool_id = req->head.args.open.pool;
 
-    // If client doesn't have capability to modify layout pools, then
-    // only permit this request if the requested pool matches what the
-    // file would have inherited anyway from its parent.
-    CDir *parent = dn->get_dir();
-    CInode *parent_in = parent->get_inode();
-    if (layout.pool_id != parent_in->inode.layout.pool_id
-        || layout.pool_ns != parent_in->inode.layout.pool_ns) {
-      access |= MAY_SET_POOL;
-    }
-
     // make sure we have as new a map as the client
     if (req->get_mdsmap_epoch() > mds->mdsmap->get_epoch()) {
       mds->wait_for_mdsmap(req->get_mdsmap_epoch(), new C_MDS_RetryRequest(mdcache, mdr));
       return;
     }
+  }
+
+  // If client doesn't have capability to modify layout pools, then
+  // only permit this request if the requested pool matches what the
+  // file would have inherited anyway from its parent.
+  if (default_layout != layout) {
+    access |= MAY_SET_VXATTR;
   }
 
   if (!layout.is_valid()) {
@@ -3973,7 +3972,7 @@ void Server::handle_client_setlayout(MDRequestRef& mdr)
   // validate layout
   file_layout_t layout = cur->get_projected_inode()->layout;
   // save existing layout for later
-  int64_t old_pool = layout.pool_id;
+  const auto old_layout = layout;
 
   int access = MAY_WRITE;
 
@@ -3986,16 +3985,18 @@ void Server::handle_client_setlayout(MDRequestRef& mdr)
   if (req->head.args.setlayout.layout.fl_pg_pool > 0) {
     layout.pool_id = req->head.args.setlayout.layout.fl_pg_pool;
 
-    if (layout.pool_id != old_pool) {
-      access |= MAY_SET_POOL;
-    }
-
     // make sure we have as new a map as the client
     if (req->get_mdsmap_epoch() > mds->mdsmap->get_epoch()) {
       mds->wait_for_mdsmap(req->get_mdsmap_epoch(), new C_MDS_RetryRequest(mdcache, mdr));
       return;
     }
   }
+
+  // Don't permit layout modifications without 'p' caps
+  if (layout != old_layout) {
+    access |= MAY_SET_VXATTR;
+  }
+
   if (!layout.is_valid()) {
     dout(10) << "bad layout" << dendl;
     respond_to_request(mdr, -EINVAL);
@@ -4018,7 +4019,7 @@ void Server::handle_client_setlayout(MDRequestRef& mdr)
   inode_t *pi = cur->project_inode();
   pi->layout = layout;
   // add the old pool to the inode
-  pi->add_old_pool(old_pool);
+  pi->add_old_pool(old_layout.pool_id);
   pi->version = cur->pre_dirty();
   pi->ctime = mdr->get_op_stamp();
   pi->change_attr++;
@@ -4069,6 +4070,8 @@ void Server::handle_client_setdirlayout(MDRequestRef& mdr)
   // Level of access required to complete
   int access = MAY_WRITE;
 
+  const auto old_layout = layout;
+
   if (req->head.args.setlayout.layout.fl_object_size > 0)
     layout.object_size = req->head.args.setlayout.layout.fl_object_size;
   if (req->head.args.setlayout.layout.fl_stripe_unit > 0)
@@ -4076,9 +4079,6 @@ void Server::handle_client_setdirlayout(MDRequestRef& mdr)
   if (req->head.args.setlayout.layout.fl_stripe_count > 0)
     layout.stripe_count=req->head.args.setlayout.layout.fl_stripe_count;
   if (req->head.args.setlayout.layout.fl_pg_pool > 0) {
-    if (req->head.args.setlayout.layout.fl_pg_pool != layout.pool_id) {
-      access |= MAY_SET_POOL;
-    }
     layout.pool_id = req->head.args.setlayout.layout.fl_pg_pool;
     // make sure we have as new a map as the client
     if (req->get_mdsmap_epoch() > mds->mdsmap->get_epoch()) {
@@ -4086,6 +4086,11 @@ void Server::handle_client_setdirlayout(MDRequestRef& mdr)
       return;
     }  
   }
+
+  if (layout != old_layout) {
+    access |= MAY_SET_VXATTR;
+  }
+
   if (!layout.is_valid()) {
     dout(10) << "bad layout" << dendl;
     respond_to_request(mdr, -EINVAL);
@@ -4315,6 +4320,10 @@ void Server::handle_set_vxattr(MDRequestRef& mdr, CInode *cur,
   inode_t *pi = NULL;
   string rest;
 
+  if (!check_access(mdr, cur, MAY_SET_VXATTR)) {
+    return;
+  }
+
   if (name.compare(0, 15, "ceph.dir.layout") == 0) {
     if (!cur->is_dir()) {
       respond_to_request(mdr, -EINVAL);
@@ -4337,13 +4346,6 @@ void Server::handle_set_vxattr(MDRequestRef& mdr, CInode *cur,
     if (!mds->locker->acquire_locks(mdr, rdlocks, wrlocks, xlocks))
       return;
 
-    if (cur->inode.layout.pool_id != layout.pool_id
-        || cur->inode.layout.pool_ns != layout.pool_ns) {
-      if (!check_access(mdr, cur, MAY_SET_POOL)) {
-        return;
-      }
-    }
-
     pi = cur->project_inode();
     pi->layout = layout;
   } else if (name.compare(0, 16, "ceph.file.layout") == 0) {
@@ -4364,13 +4366,6 @@ void Server::handle_set_vxattr(MDRequestRef& mdr, CInode *cur,
     xlocks.insert(&cur->filelock);
     if (!mds->locker->acquire_locks(mdr, rdlocks, wrlocks, xlocks))
       return;
-
-    if (cur->inode.layout.pool_id != layout.pool_id
-        || cur->inode.layout.pool_ns != layout.pool_ns) {
-      if (!check_access(mdr, cur, MAY_SET_POOL)) {
-        return;
-      }
-    }
 
     pi = cur->project_inode();
     int64_t old_pool = pi->layout.pool_id;
