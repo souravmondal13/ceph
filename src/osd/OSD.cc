@@ -2986,9 +2986,8 @@ int OSD::update_crush_location()
     bufferlist inbl;
     C_SaferCond w;
     string outs;
-    int r = monc->start_mon_command(vcmd, inbl, NULL, &outs, &w);
-    if (r == 0)
-      r = w.wait();
+    monc->start_mon_command(vcmd, inbl, NULL, &outs, &w);
+    int r = w.wait();
     if (r < 0) {
       if (r == -ENOENT && !created) {
 	string newcmd = "{\"prefix\": \"osd create\", \"id\": " + stringify(whoami)
@@ -2997,9 +2996,8 @@ int OSD::update_crush_location()
 	bufferlist inbl;
 	C_SaferCond w;
 	string outs;
-	int r = monc->start_mon_command(vnewcmd, inbl, NULL, &outs, &w);
-	if (r == 0)
-	  r = w.wait();
+	monc->start_mon_command(vnewcmd, inbl, NULL, &outs, &w);
+	int r = w.wait();
 	if (r < 0) {
 	  derr << __func__ << " fail: osd does not exist and created failed: "
 	       << cpp_strerror(r) << dendl;
