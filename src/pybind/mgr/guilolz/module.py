@@ -26,16 +26,10 @@ import jinja2
 
 from mgr_module import MgrModule, CommandResult
 
-from rest.app.types import OsdMap, NotFound, Config, FsMap, MonMap, \
+from types import OsdMap, NotFound, Config, FsMap, MonMap, \
     PgSummary, Health, MonStatus
 
 log = logging.getLogger("guilolz")
-
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "rest.app.settings")
-
-django_log = logging.getLogger("django.request")
-django_log.addHandler(logging.StreamHandler())
-django_log.setLevel(logging.DEBUG)
 
 
 # How many cluster log lines shall we hold onto in our
