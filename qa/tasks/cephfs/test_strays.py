@@ -3,6 +3,8 @@ import time
 import logging
 from textwrap import dedent
 import gevent
+import datetime
+
 from teuthology.orchestra.run import CommandFailedError
 from tasks.cephfs.cephfs_test_case import CephFSTestCase, for_teuthology
 
@@ -796,3 +798,32 @@ class TestStrays(CephFSTestCase):
         path=self.mount_a.mountpoint,
         file_count=LOW_LIMIT
         )))
+
+    def test_replicated_delete_speed(self):
+        """
+        That deletions of replicated metadata are not pathologically slow
+        """
+        rank_0_id, rank_1_id = self._setup_two_ranks()
+
+        self.set_conf("mds.{0}".format(rank_1_id), 'mds_max_purge_files', "0")
+        self.mds_cluster.mds_fail_restart(rank_1_id)
+        self.fs.wait_for_daemons()
+
+        file_count = 10
+
+        self.mount_a.create_n_files("delete_me/file", file_count)
+
+        self._force_migrate(rank_0_id, rank_1_id, "/delete_me",
+                            self.mount_a.path_to_ino("delete_me/file_0"))
+
+        begin = datetime.datetime.now()
+        self.mount_a.run_shell(["rm", "-rf", Raw("delete_me/*")])
+        end = datetime.datetime.now()
+
+        # What we're really checking here is that we are completing client
+        # operations immediately rather than delaying until the next tick.
+        tick_period = float(self.fs.get_config("mds_tick_interval",
+                                               service_type="mds"))
+
+        duration = (end - begin).total_seconds()
+        self.assertLess(duration, (file_count * tick_period) * 0.25)
